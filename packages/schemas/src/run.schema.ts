@@ -35,6 +35,7 @@ export const RunSchema = z.object({
   worktreePath: z.string().min(1).optional(),
   baseBranch: z.string().min(1).optional(),
   updatedAt: z.string().datetime().optional(),
+  cleanedAt: z.string().datetime().optional(),
   approvals: z.array(ApprovalSchema).optional()
 });
 

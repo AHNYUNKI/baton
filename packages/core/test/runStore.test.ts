@@ -60,4 +60,17 @@ describe("RunStore", () => {
       updatedAt: "2026-06-15T00:00:01.000Z"
     });
   });
+
+  it("marks a run as cleaned while preserving the run record", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "baton-run-store-"));
+    const artifactStore = new ArtifactStore({ workspaceRoot });
+    const store = new RunStore({ artifactStore, clock: fixedClock("2026-06-15T00:00:01.000Z") });
+    await store.save({ ...runFixture(), status: "completed" });
+
+    const cleaned = await store.markCleaned("run-1");
+
+    expect(cleaned.cleanedAt).toBe("2026-06-15T00:00:01.000Z");
+    expect((await store.load("run-1")).cleanedAt).toBe("2026-06-15T00:00:01.000Z");
+    expect(await readFile(path.join(artifactStore.getRunDir("run-1"), "run.json"), "utf8")).toContain("cleanedAt");
+  });
 });

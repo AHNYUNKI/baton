@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const packagesRoot = fileURLToPath(new URL("../../", import.meta.url));
+const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 
 describe("security regressions", () => {
   it("does not add blocked local auth paths or elevated sandbox defaults under packages", async () => {
@@ -20,6 +21,14 @@ describe("security regressions", () => {
     for (const pattern of blockedPatterns) {
       expect(pattern.test(content)).toBe(false);
     }
+  });
+
+  it("keeps run artifact allow-list patterns trackable", async () => {
+    const content = await readFile(path.join(repoRoot, ".gitignore"), "utf8");
+
+    expect(content).toContain(".baton/runs/*");
+    expect(content).not.toContain(".baton/runs/\n");
+    expect(content).toContain("!.baton/runs/codex-exec-v0.3/");
   });
 });
 

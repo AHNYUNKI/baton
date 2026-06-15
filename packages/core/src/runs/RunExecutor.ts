@@ -261,6 +261,11 @@ export class RunExecutor {
           step,
           runDirectory: this.artifactStore.getRunDir(run.id)
         }),
+        metadata: {
+          runId: run.id,
+          stepId: step.id,
+          runDirectory: this.artifactStore.getRunDir(run.id)
+        },
         ...(timeoutMs === undefined ? {} : { timeoutMs })
       });
     } catch (error) {
