@@ -1,0 +1,114 @@
+{
+  "version": "1",
+  "runId": "bootstrap-v0.1",
+  "tasks": [
+    {
+      "id": "task-001",
+      "title": "Monorepo root scaffolding",
+      "description": "pnpm 워크스페이스와 strict TypeScript(ESM/NodeNext) 루트 설정을 만든다. 루트 package.json(private)에 scripts: build='tsc -b', typecheck='tsc -b --noEmit', test='vitest run', dev(tsx). devDeps: typescript, vitest, tsx, @types/node. tsconfig.base.json(strict, module/moduleResolution NodeNext, target ES2022, declaration, composite). solution tsconfig.json은 3개 패키지 references. vitest.config.ts는 패키지 테스트 글롭. .gitignore(node_modules, dist, *.tsbuildinfo, .baton/runs/).",
+      "targetFiles": ["package.json", "pnpm-workspace.yaml", "tsconfig.base.json", "tsconfig.json", "vitest.config.ts", ".gitignore"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02", "AC-03"],
+      "testCommands": ["pnpm install", "pnpm typecheck"]
+    },
+    {
+      "id": "task-002",
+      "title": "@baton/schemas Zod schemas",
+      "description": "schemas 패키지(deps: zod) 생성. project/agentProfile/workflow/run/artifact/approval 6개 Zod 스키마와 z.infer 타입을 정의하고 index.ts에서 재export. design.md의 Data Model Changes 형태를 따른다. 각 스키마 유효/무효 입력 단위 테스트.",
+      "targetFiles": ["packages/schemas/package.json", "packages/schemas/tsconfig.json", "packages/schemas/src/index.ts", "packages/schemas/src/project.schema.ts", "packages/schemas/src/agentProfile.schema.ts", "packages/schemas/src/workflow.schema.ts", "packages/schemas/src/run.schema.ts", "packages/schemas/src/artifact.schema.ts", "packages/schemas/src/approval.schema.ts", "packages/schemas/test/schemas.test.ts"],
+      "dependencies": ["task-001"],
+      "acceptanceCriteria": ["AC-06", "AC-07"],
+      "testCommands": ["pnpm --filter @baton/schemas test"]
+    },
+    {
+      "id": "task-003",
+      "title": "core config paths + ArtifactStore",
+      "description": "core 패키지(deps: zod, yaml, @baton/schemas) 생성. config/paths.ts: batonHome()($BATON_HOME 오버라이드, 기본 ~/.baton), workspaceDir(cwd), runDir(runId). artifacts/ArtifactStore.ts: run 디렉터리(중첩 logs/) 생성, artifact write/read. 단위 테스트는 $BATON_HOME를 임시 디렉터리로 격리.",
+      "targetFiles": ["packages/core/package.json", "packages/core/tsconfig.json", "packages/core/src/index.ts", "packages/core/src/config/paths.ts", "packages/core/src/artifacts/ArtifactStore.ts", "packages/core/test/paths.test.ts", "packages/core/test/artifactStore.test.ts"],
+      "dependencies": ["task-001", "task-002"],
+      "acceptanceCriteria": ["AC-08", "AC-09"],
+      "testCommands": ["pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-004",
+      "title": "SQLite skeleton (interface + DDL)",
+      "description": "db/DbClient.ts 인터페이스, db/ddl.ts(projects, agent_profiles, workflows, runs, run_steps, artifacts, events, approvals 8개 테이블 DDL 상수), db/openDatabase.ts skeleton 팩토리(네이티브 드라이버 미연결, import/초기화가 throw하지 않음). 테스트로 인터페이스 계약과 DDL 존재 확인.",
+      "targetFiles": ["packages/core/src/db/DbClient.ts", "packages/core/src/db/ddl.ts", "packages/core/src/db/openDatabase.ts", "packages/core/test/db.test.ts"],
+      "dependencies": ["task-003"],
+      "acceptanceCriteria": ["AC-10"],
+      "testCommands": ["pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-005",
+      "title": "Ports + EventLogger skeleton",
+      "description": "ports/ProcessRunner.ts(인터페이스 run(command, args[], opts) → {stdout,stderr,exitCode,durationMs}, node:child_process 실제 구현, createMockProcessRunner 헬퍼), ports/Clock.ts(systemClock, fixedClock). events/EventLogger.ts: 주입 Clock으로 JSONL 한 줄씩 append. fixedClock으로 결정적 테스트.",
+      "targetFiles": ["packages/core/src/ports/ProcessRunner.ts", "packages/core/src/ports/Clock.ts", "packages/core/src/events/EventLogger.ts", "packages/core/test/eventLogger.test.ts"],
+      "dependencies": ["task-003"],
+      "acceptanceCriteria": ["AC-11"],
+      "testCommands": ["pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-006",
+      "title": "ProjectService registry",
+      "description": "projects/ProjectService.ts: Baton 홈 레지스트리(projects.json)에 add/list. add는 경로 존재 검증, 중복은 멱등. 잘못된 경로는 명확한 에러. $BATON_HOME 임시 디렉터리로 테스트 격리.",
+      "targetFiles": ["packages/core/src/projects/ProjectService.ts", "packages/core/test/projectService.test.ts"],
+      "dependencies": ["task-003"],
+      "acceptanceCriteria": ["AC-12"],
+      "testCommands": ["pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-007",
+      "title": "Agent/Workflow YAML loaders + examples",
+      "description": "agents/loadAgentProfiles.ts, workflows/loadWorkflows.ts: yaml.parse 후 @baton/schemas Zod로 검증. 번들 examples/ + 로컬 .baton/agents|workflows 병합 로딩. 검증/문법 실패 시 파일 경로 포함 명확한 에러(silent 실패 금지). 예제 YAML 작성.",
+      "targetFiles": ["packages/core/src/agents/loadAgentProfiles.ts", "packages/core/src/workflows/loadWorkflows.ts", "examples/agents/analyst.agent.yaml", "examples/agents/architect.agent.yaml", "examples/agents/implementer.agent.yaml", "examples/workflows/default.workflow.yaml", "packages/core/test/loaders.test.ts"],
+      "dependencies": ["task-002", "task-003"],
+      "acceptanceCriteria": ["AC-13", "AC-27"],
+      "testCommands": ["pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-008",
+      "title": "GitWorktreeManager skeleton",
+      "description": "git/GitWorktreeManager.ts: 인터페이스(createWorktree, removeWorktree, list) + ProcessRunner 기반 skeleton. createWorktree는 'git worktree add <path> -b baton/<runId> <base>'를 인자 배열로 전달(셸 문자열 결합 금지). main/base 직접 수정 경로 없음. 테스트는 mock ProcessRunner로 인자 단언, 실제 git 미실행.",
+      "targetFiles": ["packages/core/src/git/GitWorktreeManager.ts", "packages/core/test/worktreeManager.test.ts"],
+      "dependencies": ["task-005"],
+      "acceptanceCriteria": ["AC-14", "AC-25"],
+      "testCommands": ["pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-009",
+      "title": "WorkerAdapter + CodexExecAdapter skeleton",
+      "description": "workers/WorkerAdapter.ts 공통 인터페이스. workers/codex/types.ts(WorkerRunInput{cwd,prompt,timeoutMs?,metadata?}, WorkerRunResult{success,exitCode,stdout,stderr,durationMs,artifacts}). workers/codex/CodexExecAdapter.ts: ProcessRunner로 실행 골격, stdout/stderr/exitCode/duration 캡처, timeout 전달, 기본 sandbox는 workspace-write 의도(주석), auth 파일 무접근. 테스트는 mock ProcessRunner.",
+      "targetFiles": ["packages/core/src/workers/WorkerAdapter.ts", "packages/core/src/workers/codex/types.ts", "packages/core/src/workers/codex/CodexExecAdapter.ts", "packages/core/test/codexExecAdapter.test.ts"],
+      "dependencies": ["task-005"],
+      "acceptanceCriteria": ["AC-15", "AC-23", "AC-24"],
+      "testCommands": ["pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-010",
+      "title": "RunService dry-run planning",
+      "description": "runs/RunService.ts: createRun(request, options{ dryRun, workflowId?, projectId? }). runId 생성(crypto.randomUUID 기반), ArtifactStore로 .baton/runs/<runId>/request.md + run.json(status 'planned', dryRun true) 기록, 선택된 workflow의 step을 RunStep 계획으로 전개해 반환. dryRun일 때 WorkerAdapter/GitWorktreeManager를 호출하지 않음. 테스트: mock 어댑터/매니저 호출 0회 단언 + 아티팩트 생성 확인.",
+      "targetFiles": ["packages/core/src/runs/RunService.ts", "packages/core/test/runService.test.ts"],
+      "dependencies": ["task-003", "task-007", "task-008", "task-009"],
+      "acceptanceCriteria": ["AC-16"],
+      "testCommands": ["pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-011",
+      "title": "@baton/cli dispatcher + commands",
+      "description": "cli 패키지(bin: baton, deps: @baton/core, @baton/schemas). main.ts 소형 디스패처(외부 파서 없음, --help/사용법, 비정상 종료 코드). commands: init(.baton/ 생성 idempotent), project(add/list), agent(list), workflow(list), run(<request> --dry-run), doctor(codex 가용/버전). 핸들러는 얇게(파싱→core 호출→출력). core 서비스 주입/mock으로 CLI 테스트.",
+      "targetFiles": ["packages/cli/package.json", "packages/cli/tsconfig.json", "packages/cli/src/main.ts", "packages/cli/src/commands/init.ts", "packages/cli/src/commands/project.ts", "packages/cli/src/commands/agent.ts", "packages/cli/src/commands/workflow.ts", "packages/cli/src/commands/run.ts", "packages/cli/src/commands/doctor.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-006", "task-007", "task-009", "task-010"],
+      "acceptanceCriteria": ["AC-17", "AC-18", "AC-19", "AC-20", "AC-21", "AC-22"],
+      "testCommands": ["pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-012",
+      "title": "README, scripts wiring, smoke",
+      "description": "루트 README.md: 명령 사용법, v0.1 비목표, 후속 TODO(ESLint, 실제 SQLite 드라이버, 실제 Codex 실행 연결). 루트 스크립트 최종 정리. 빌드 산출물 'node packages/cli/dist/main.js --help' 스모크로 ESM .js 확장자 회귀 방지. 전체 게이트(typecheck/test/build) 통과 확인.",
+      "targetFiles": ["README.md"],
+      "dependencies": ["task-011"],
+      "acceptanceCriteria": ["AC-04", "AC-05", "AC-26", "AC-28"],
+      "testCommands": ["pnpm typecheck", "pnpm test", "pnpm build", "node packages/cli/dist/main.js --help"]
+    }
+  ]
+}

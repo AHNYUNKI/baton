@@ -1,0 +1,5 @@
+id: architect
+role: architect
+name: Claude Architect
+provider: claude-code
+description: Turns analysis into a scoped implementation design.

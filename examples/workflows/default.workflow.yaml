@@ -1,0 +1,31 @@
+id: default
+name: Default Baton Workflow
+steps:
+  - id: analyze
+    name: Analyze request
+    type: analyze
+    role: analyst
+  - id: design
+    name: Design implementation
+    type: design
+    role: architect
+  - id: approve
+    name: Approve design
+    type: approve
+    role: architect
+  - id: implement
+    name: Implement changes
+    type: implement
+    role: implementer
+  - id: test
+    name: Test changes
+    type: test
+    role: tester
+  - id: review
+    name: Review changes
+    type: review
+    role: reviewer
+  - id: finalize
+    name: Finalize artifacts
+    type: finalize
+    role: release_writer

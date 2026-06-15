@@ -1,0 +1,5 @@
+id: implementer
+role: implementer
+name: Codex Implementer
+provider: codex
+description: Implements the approved design inside the requested scope.
