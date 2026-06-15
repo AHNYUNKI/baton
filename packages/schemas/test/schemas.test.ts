@@ -5,6 +5,8 @@ import {
   ArtifactSchema,
   ProjectSchema,
   RunSchema,
+  RunStatusSchema,
+  RunStepStatusSchema,
   WorkflowSchema
 } from "../src/index.js";
 
@@ -58,13 +60,29 @@ describe("@baton/schemas", () => {
         id: "run-1",
         request: "Build it",
         workflowId: "default",
-        status: "planned",
+        status: "awaiting-approval",
         dryRun: true,
         createdAt: "2026-06-15T00:00:00.000Z",
-        steps: [{ id: "analyze", type: "analyze", status: "planned" }]
+        updatedAt: "2026-06-15T00:00:01.000Z",
+        worktreePath: "/tmp/worktree",
+        baseBranch: "main",
+        steps: [
+          {
+            id: "analyze",
+            type: "analyze",
+            status: "completed",
+            startedAt: "2026-06-15T00:00:00.000Z",
+            completedAt: "2026-06-15T00:00:01.000Z",
+            reason: "done",
+            artifacts: ["/tmp/artifact.md"]
+          }
+        ]
       }).success
     ).toBe(true);
 
+    expect(RunStatusSchema.options).toContain("awaiting-approval");
+    expect(RunStepStatusSchema.safeParse("skipped").success).toBe(true);
+    expect(RunStepStatusSchema.safeParse("cancelled").success).toBe(false);
     expect(
       RunSchema.safeParse({
         id: "run-1",
@@ -76,6 +94,20 @@ describe("@baton/schemas", () => {
         steps: []
       }).success
     ).toBe(false);
+  });
+
+  it("parses v0.1 run json without v0.2 optional fields", () => {
+    expect(
+      RunSchema.safeParse({
+        id: "run-1",
+        request: "Build it",
+        workflowId: "default",
+        status: "planned",
+        dryRun: true,
+        createdAt: "2026-06-15T00:00:00.000Z",
+        steps: [{ id: "analyze", type: "analyze", status: "planned" }]
+      }).success
+    ).toBe(true);
   });
 
   it("validates artifacts", () => {
@@ -96,8 +128,10 @@ describe("@baton/schemas", () => {
       ApprovalSchema.safeParse({
         runId: "run-1",
         stepId: "approve",
-        status: "pending",
-        createdAt: "2026-06-15T00:00:00.000Z"
+        status: "approved",
+        createdAt: "2026-06-15T00:00:00.000Z",
+        decidedAt: "2026-06-15T00:01:00.000Z",
+        note: "Looks good"
       }).success
     ).toBe(true);
 

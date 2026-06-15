@@ -6,7 +6,9 @@ export const ApprovalSchema = z.object({
   runId: z.string().min(1),
   stepId: z.string().min(1),
   status: ApprovalStatusSchema,
-  createdAt: z.string().datetime()
+  createdAt: z.string().datetime(),
+  decidedAt: z.string().datetime().optional(),
+  note: z.string().min(1).optional()
 });
 
 export type ApprovalStatus = z.infer<typeof ApprovalStatusSchema>;
