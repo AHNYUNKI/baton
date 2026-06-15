@@ -1,0 +1,19 @@
+{
+  "name": "@baton/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "baton": "./dist/main.js"
+  },
+  "main": "./dist/main.js",
+  "types": "./dist/main.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --noEmit",
+    "test": "vitest run --config ../../vitest.config.ts --dir test"
+  },
+  "dependencies": {
+    "@baton/core": "workspace:*",
+    "@baton/schemas": "workspace:*"
+  }
+}

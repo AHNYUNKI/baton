@@ -1,0 +1,5 @@
+id: analyst
+role: analyst
+name: Claude Analyst
+provider: claude-code
+description: Reads the request and repository context, then produces analysis artifacts.
