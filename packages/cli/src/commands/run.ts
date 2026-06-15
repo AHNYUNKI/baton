@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import {
   ApprovalPolicy,
   ArtifactStore,
@@ -10,7 +12,8 @@ import {
 import type { Run } from "@baton/schemas";
 
 import type { CommandContext, CommandResult } from "./context.js";
-import { createDefaultWorkerRegistry } from "../registry.js";
+import { checkCodex } from "./doctor.js";
+import { createCodexWorkerRegistry, createDefaultWorkerRegistry } from "../registry.js";
 
 export async function runCommand(args: readonly string[], context: CommandContext): Promise<CommandResult> {
   if (args.length === 0) {
@@ -31,6 +34,8 @@ export async function runCommand(args: readonly string[], context: CommandContex
       return resumeCommand(rest, context);
     case "approve":
       return approveCommand(rest, context);
+    case "clean":
+      return cleanCommand(rest, context);
     default:
       return executeCommand(args, context);
   }
@@ -60,8 +65,15 @@ async function executeCommand(args: readonly string[], context: CommandContext):
     return 0;
   }
 
-  const executor = createExecutor(context, artifactStore, runService, workflows);
-  warnStub(context);
+  if (parsed.useCodex) {
+    const preflight = await preflightCodex(context);
+    if (preflight !== 0) {
+      return preflight;
+    }
+  }
+
+  const executor = createExecutor(context, artifactStore, runService, workflows, { useCodex: parsed.useCodex });
+  warnRegistry(context, parsed.useCodex);
   const result = await executor.start(parsed.request, {
     ...(parsed.workflowId === undefined ? {} : { workflowId: parsed.workflowId }),
     ...(parsed.projectId === undefined ? {} : { projectId: parsed.projectId })
@@ -89,14 +101,22 @@ async function statusCommand(args: readonly string[], context: CommandContext): 
 }
 
 async function resumeCommand(args: readonly string[], context: CommandContext): Promise<CommandResult> {
-  if (args.length !== 1 || args[0] === undefined) {
+  const parsed = parseRunIdWithCodex(args);
+  if (parsed === undefined) {
     context.stderr(runUsage());
     return 1;
   }
 
-  const { executor } = await createExecutorFromContext(context);
-  warnStub(context);
-  const result = await executor.resume(args[0]);
+  if (parsed.useCodex) {
+    const preflight = await preflightCodex(context);
+    if (preflight !== 0) {
+      return preflight;
+    }
+  }
+
+  const { executor } = await createExecutorFromContext(context, { useCodex: parsed.useCodex });
+  warnRegistry(context, parsed.useCodex);
+  const result = await executor.resume(parsed.runId);
 
   printRun(context, result.run);
   printSteps(context, result.run);
@@ -111,7 +131,14 @@ async function approveCommand(args: readonly string[], context: CommandContext):
     return 1;
   }
 
-  const { executor } = await createExecutorFromContext(context);
+  if (parsed.useCodex && !parsed.reject) {
+    const preflight = await preflightCodex(context);
+    if (preflight !== 0) {
+      return preflight;
+    }
+  }
+
+  const { executor } = await createExecutorFromContext(context, { useCodex: parsed.useCodex });
   const decided = await executor.decide(parsed.runId, {
     decision: parsed.reject ? "rejected" : "approved",
     ...(parsed.note === undefined ? {} : { note: parsed.note })
@@ -123,7 +150,7 @@ async function approveCommand(args: readonly string[], context: CommandContext):
     return 0;
   }
 
-  warnStub(context);
+  warnRegistry(context, parsed.useCodex);
   const result = await executor.resume(parsed.runId);
   printRun(context, result.run);
   printSteps(context, result.run);
@@ -131,9 +158,53 @@ async function approveCommand(args: readonly string[], context: CommandContext):
   return result.outcome === "failed" || result.outcome === "cancelled" ? 1 : 0;
 }
 
+async function cleanCommand(args: readonly string[], context: CommandContext): Promise<CommandResult> {
+  if (args.length !== 1 || args[0] === undefined) {
+    context.stderr(runUsage());
+    return 1;
+  }
+
+  const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
+  const runStore = new RunStore({ artifactStore });
+  const run = await runStore.load(args[0]);
+  if (!isTerminalRun(run)) {
+    context.stderr(`Cannot clean run ${run.id} while status is ${run.status}.`);
+    return 1;
+  }
+
+  if (run.cleanedAt !== undefined) {
+    context.stdout(`Run ${run.id} already cleaned at ${run.cleanedAt}.`);
+    return 0;
+  }
+
+  if (run.worktreePath === undefined) {
+    const cleaned = await runStore.markCleaned(run.id);
+    context.stdout(`Run ${cleaned.id} has no worktree to clean.`);
+    return 0;
+  }
+
+  if (path.resolve(run.worktreePath) === path.resolve(context.cwd)) {
+    context.stderr(`Refusing to clean repository root for run ${run.id}.`);
+    return 1;
+  }
+
+  const worktreeManager = new GitWorktreeManager({ runner: context.runner, repoRoot: context.cwd });
+  const result = await worktreeManager.removeWorktree(run.worktreePath);
+  if (result.exitCode !== 0) {
+    const message = result.stderr.trim() || result.stdout.trim() || `exit code ${result.exitCode}`;
+    context.stderr(`Failed to remove worktree for run ${run.id}: ${message}`);
+    return 1;
+  }
+
+  const cleaned = await runStore.markCleaned(run.id);
+  context.stdout(`Cleaned worktree for run ${cleaned.id}: ${run.worktreePath}`);
+  return 0;
+}
+
 type ParsedExecuteArgs = {
   request: string;
   dryRun: boolean;
+  useCodex: boolean;
   workflowId?: string;
   projectId?: string;
 };
@@ -141,6 +212,7 @@ type ParsedExecuteArgs = {
 function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefined {
   const requestParts: string[] = [];
   let dryRun = false;
+  let useCodex = false;
   let workflowId: string | undefined;
   let projectId: string | undefined;
 
@@ -149,6 +221,11 @@ function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefine
 
     if (arg === "--dry-run") {
       dryRun = true;
+      continue;
+    }
+
+    if (arg === "--codex") {
+      useCodex = true;
       continue;
     }
 
@@ -179,10 +256,11 @@ function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefine
   }
 
   return workflowId === undefined && projectId === undefined
-    ? { request, dryRun }
+    ? { request, dryRun, useCodex }
     : {
         request,
         dryRun,
+        useCodex,
         ...(workflowId === undefined ? {} : { workflowId }),
         ...(projectId === undefined ? {} : { projectId })
       };
@@ -191,11 +269,13 @@ function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefine
 type ParsedApproveArgs = {
   runId: string;
   reject: boolean;
+  useCodex: boolean;
   note?: string;
 };
 
 function parseApproveArgs(args: readonly string[]): ParsedApproveArgs | undefined {
   let reject = false;
+  let useCodex = false;
   let note: string | undefined;
   const positional: string[] = [];
 
@@ -204,6 +284,11 @@ function parseApproveArgs(args: readonly string[]): ParsedApproveArgs | undefine
 
     if (arg === "--reject") {
       reject = true;
+      continue;
+    }
+
+    if (arg === "--codex") {
+      useCodex = true;
       continue;
     }
 
@@ -226,15 +311,47 @@ function parseApproveArgs(args: readonly string[]): ParsedApproveArgs | undefine
     return undefined;
   }
 
-  return note === undefined ? { runId: positional[0], reject } : { runId: positional[0], reject, note };
+  return note === undefined ? { runId: positional[0], reject, useCodex } : { runId: positional[0], reject, useCodex, note };
 }
 
-async function createExecutorFromContext(context: CommandContext): Promise<{ executor: RunExecutor }> {
+type ParsedRunIdWithCodex = {
+  runId: string;
+  useCodex: boolean;
+};
+
+function parseRunIdWithCodex(args: readonly string[]): ParsedRunIdWithCodex | undefined {
+  let useCodex = false;
+  const positional: string[] = [];
+
+  for (const arg of args) {
+    if (arg === "--codex") {
+      useCodex = true;
+      continue;
+    }
+
+    if (arg.startsWith("--")) {
+      return undefined;
+    }
+
+    positional.push(arg);
+  }
+
+  if (positional.length !== 1 || positional[0] === undefined) {
+    return undefined;
+  }
+
+  return {
+    runId: positional[0],
+    useCodex
+  };
+}
+
+async function createExecutorFromContext(context: CommandContext, options: { useCodex: boolean } = { useCodex: false }): Promise<{ executor: RunExecutor }> {
   const workflows = await loadWorkflows({ cwd: context.cwd });
   const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
   const runService = new RunService({ artifactStore, workflows });
   return {
-    executor: createExecutor(context, artifactStore, runService, workflows)
+    executor: createExecutor(context, artifactStore, runService, workflows, options)
   };
 }
 
@@ -242,9 +359,10 @@ function createExecutor(
   context: CommandContext,
   artifactStore: ArtifactStore,
   runService: RunService,
-  workflows: Awaited<ReturnType<typeof loadWorkflows>>
+  workflows: Awaited<ReturnType<typeof loadWorkflows>>,
+  options: { useCodex: boolean } = { useCodex: false }
 ): RunExecutor {
-  const { registry } = createDefaultWorkerRegistry();
+  const { registry } = options.useCodex ? createCodexWorkerRegistry({ runner: context.runner }) : createDefaultWorkerRegistry();
   return new RunExecutor({
     runService,
     runStore: new RunStore({ artifactStore }),
@@ -281,12 +399,38 @@ function warnStub(context: CommandContext): void {
   context.stderr(`Warning: using StubWorker for ${stubRoles.join(", ")}.`);
 }
 
+function warnRegistry(context: CommandContext, useCodex: boolean): void {
+  if (!useCodex) {
+    warnStub(context);
+    return;
+  }
+
+  const { codexRoles, stubRoles } = createCodexWorkerRegistry();
+  context.stderr(`Warning: using CodexExecAdapter for ${codexRoles.join(", ")}; StubWorker for ${stubRoles.join(", ")}.`);
+}
+
+async function preflightCodex(context: CommandContext): Promise<CommandResult> {
+  const result = await checkCodex(context.runner, { cwd: context.cwd });
+  if (result.available) {
+    return 0;
+  }
+
+  const prefix = result.reason === "not-installed" ? "Codex not installed or not on PATH" : "Codex command returned an error";
+  context.stderr(`${prefix}: ${result.message}`);
+  return 1;
+}
+
+function isTerminalRun(run: Run): boolean {
+  return run.status === "completed" || run.status === "failed" || run.status === "cancelled";
+}
+
 function runUsage(): string {
   return [
     "Usage:",
-    "  baton run <request> [--dry-run] [--workflow <id>] [--project <id>]",
+    "  baton run <request> [--dry-run] [--codex] [--workflow <id>] [--project <id>]",
     "  baton run status <runId>",
-    "  baton run resume <runId>",
-    "  baton run approve <runId> [--reject] [--note <text>]"
+    "  baton run resume <runId> [--codex]",
+    "  baton run approve <runId> [--codex] [--reject] [--note <text>]",
+    "  baton run clean <runId>"
   ].join("\n");
 }

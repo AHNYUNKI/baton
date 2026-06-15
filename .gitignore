@@ -2,5 +2,6 @@ node_modules/
 dist/
 *.tsbuildinfo
 coverage/
-.baton/runs/
+.baton/runs/*
 !.baton/runs/bootstrap-v0.1/
+!.baton/runs/codex-exec-v0.3/

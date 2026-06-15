@@ -1,0 +1,79 @@
+{
+  "version": "1",
+  "runId": "codex-exec-v0.3",
+  "buildsOn": "run-engine-v0.2",
+  "tasks": [
+    {
+      "id": "task-201",
+      "title": "ProcessRunner stdin (input) support",
+      "description": "ports/ProcessRunner.ts: ProcessRunOptions에 optional input(string) 추가. node 구현(createNodeProcessRunner)은 input이 있으면 자식 프로세스 stdin에 write 후 종료. createMockProcessRunner는 전달된 input을 캡처해 검증 가능하게. input 미지정 시 기존 동작 동일. 회귀 + input 캡처 테스트.",
+      "targetFiles": ["packages/core/src/ports/ProcessRunner.ts", "packages/core/test/processRunner.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02", "AC-03"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-202",
+      "title": "CodexExecAdapter: stdin prompt + artifact + hardening",
+      "description": "workers/codex/CodexExecAdapter.ts: 프롬프트를 argv가 아닌 ProcessRunner input(stdin)으로 전달(argv에서 프롬프트 평문 제거). 프롬프트를 아티팩트로 기록(주입된 ArtifactStore+runId로 steps/<stepId>.prompt.md 작성하거나 WorkerRunResult.artifacts에 경로 포함). command/args/sandbox 구성 가능, 기본 sandbox 'workspace-write', danger 미설정. exitCode!==0/timeout → success:false. auth 경로 미접근. stdin 전달/argv 평문 부재/sandbox 기본/실패 매핑 테스트.",
+      "targetFiles": ["packages/core/src/workers/codex/CodexExecAdapter.ts", "packages/core/test/codexExecAdapter.test.ts"],
+      "dependencies": ["task-201"],
+      "acceptanceCriteria": ["AC-04", "AC-05", "AC-06", "AC-07", "AC-08"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-203",
+      "title": "codex doctor: distinguish not-installed vs error",
+      "description": "cli/commands/doctor.ts: 공용 checkCodex(runner) 추출 — codex 실행 불가(ENOENT/throw)와 실행 후 비정상 exit를 구분해 서로 다른 메시지/안내 반환. doctor는 가용 시 버전+exit 0, 비가용 시 안내+exit 1. credential 파일 read 없음. 미설치/오류/가용 3경로 테스트.",
+      "targetFiles": ["packages/cli/src/commands/doctor.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-09", "AC-10", "AC-11"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-204",
+      "title": "createCodexWorkerRegistry (implementer/fixer only)",
+      "description": "cli/registry.ts: createCodexWorkerRegistry() 추가 — implementer/fixer 역할에 CodexExecAdapter, 그 외 역할(analyst/architect/tester/reviewer/release_writer)은 StubWorker. 기존 createDefaultWorkerRegistry(전부 Stub) 유지. 역할 한정/기본 회귀 테스트.",
+      "targetFiles": ["packages/cli/src/registry.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-202"],
+      "acceptanceCriteria": ["AC-13"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-205",
+      "title": "CLI run --codex opt-in + preflight",
+      "description": "cli/commands/run.ts: --codex 플래그 파싱. --codex 시 run 시작 전 checkCodex 프리플라이트 → 실패면 안내+exit 1, worktreeManager.createWorktree/RunStore 미호출. 성공 시 createCodexWorkerRegistry 주입, 아니면 기본 Stub. resume도 --codex 지원. 플래그 없으면 실제 codex 호출 0회(회귀). 프리플라이트 실패 무생성/플래그 한정 테스트.",
+      "targetFiles": ["packages/cli/src/commands/run.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-203", "task-204"],
+      "acceptanceCriteria": ["AC-12", "AC-14", "AC-15", "AC-16"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-206",
+      "title": "run clean <runId>",
+      "description": "cli/commands/run.ts + core(RunStore/RunExecutor): run clean <runId> 서브커맨드. load run → 종료 상태(completed/failed/cancelled)만 허용(진행/대기 중 거부+에러). worktreeManager.removeWorktree(run.worktreePath) 1회, base/main 경로/브랜치 미접근. run.json 보존 + cleaned 표시(optional cleanedAt). worktreePath 없음/이미 제거는 멱등 처리. 경로/거부/멱등 테스트.",
+      "targetFiles": ["packages/cli/src/commands/run.ts", "packages/core/src/runs/RunStore.ts", "packages/schemas/src/run.schema.ts", "packages/cli/test/cli.test.ts", "packages/core/test/runStore.test.ts"],
+      "dependencies": ["task-205"],
+      "acceptanceCriteria": ["AC-17", "AC-18", "AC-19"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test", "corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-207",
+      "title": ".gitignore fix + README + security regression",
+      "description": ".gitignore: '.baton/runs/' → '.baton/runs/*' + '!.baton/runs/<id>/'가 동작하도록 수정(부모 디렉터리 제외 회피, 강제 -f 불필요). README.md에 --codex/프리플라이트/run clean/안전 모델 문서화. 보안 회귀 테스트: auth.json/.codex/credential 및 danger-full-access 매치 0, codex runner cwd가 base/main 아님.",
+      "targetFiles": [".gitignore", "README.md", "packages/core/test/security.test.ts"],
+      "dependencies": ["task-206"],
+      "acceptanceCriteria": ["AC-20", "AC-21", "AC-22"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-208",
+      "title": "Full gates + smoke",
+      "description": "전체 게이트 실행 후 v0.1/v0.2/v0.3 회귀 없음 확인. node packages/cli/dist/main.js run --help 스모크. 자체 diff 리뷰로 불필요한 변경 제거, 최종 요약 작성.",
+      "targetFiles": [],
+      "dependencies": ["task-207"],
+      "acceptanceCriteria": ["AC-23"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build", "node packages/cli/dist/main.js run --help"]
+    }
+  ]
+}

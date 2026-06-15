@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 export type ProcessRunOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  input?: string;
   timeoutMs?: number;
 };
 
@@ -58,6 +59,12 @@ export function createNodeProcessRunner(): ProcessRunner {
         child.stderr.on("data", (chunk: Buffer) => {
           stderr += chunk.toString("utf8");
         });
+
+        if (options.input !== undefined) {
+          child.stdin.end(options.input, "utf8");
+        } else {
+          child.stdin.end();
+        }
 
         child.on("error", (error: Error) => {
           if (timeout !== undefined) {

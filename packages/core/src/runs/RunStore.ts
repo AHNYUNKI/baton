@@ -55,6 +55,14 @@ export class RunStore {
       throw new Error(`Invalid run state for ${runId}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+
+  public async markCleaned(runId: string): Promise<Run> {
+    const loaded = await this.load(runId);
+    return this.save({
+      ...loaded,
+      cleanedAt: this.clock.now().toISOString()
+    });
+  }
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
