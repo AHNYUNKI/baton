@@ -12,8 +12,8 @@ import {
 import type { Run } from "@baton/schemas";
 
 import type { CommandContext, CommandResult } from "./context.js";
-import { checkCodex } from "./doctor.js";
-import { createCodexWorkerRegistry, createDefaultWorkerRegistry } from "../registry.js";
+import { checkClaude, checkCodex } from "./doctor.js";
+import { createDefaultWorkerRegistry, createWorkerRegistry } from "../registry.js";
 
 export async function runCommand(args: readonly string[], context: CommandContext): Promise<CommandResult> {
   if (args.length === 0) {
@@ -72,8 +72,15 @@ async function executeCommand(args: readonly string[], context: CommandContext):
     }
   }
 
-  const executor = createExecutor(context, artifactStore, runService, workflows, { useCodex: parsed.useCodex });
-  warnRegistry(context, parsed.useCodex);
+  if (parsed.useClaude) {
+    const preflight = await preflightClaude(context);
+    if (preflight !== 0) {
+      return preflight;
+    }
+  }
+
+  const executor = createExecutor(context, artifactStore, runService, workflows, { useCodex: parsed.useCodex, useClaude: parsed.useClaude });
+  warnRegistry(context, parsed.useCodex, parsed.useClaude);
   const result = await executor.start(parsed.request, {
     ...(parsed.workflowId === undefined ? {} : { workflowId: parsed.workflowId }),
     ...(parsed.projectId === undefined ? {} : { projectId: parsed.projectId })
@@ -101,7 +108,7 @@ async function statusCommand(args: readonly string[], context: CommandContext): 
 }
 
 async function resumeCommand(args: readonly string[], context: CommandContext): Promise<CommandResult> {
-  const parsed = parseRunIdWithCodex(args);
+  const parsed = parseRunIdWithWorkers(args);
   if (parsed === undefined) {
     context.stderr(runUsage());
     return 1;
@@ -114,8 +121,15 @@ async function resumeCommand(args: readonly string[], context: CommandContext): 
     }
   }
 
-  const { executor } = await createExecutorFromContext(context, { useCodex: parsed.useCodex });
-  warnRegistry(context, parsed.useCodex);
+  if (parsed.useClaude) {
+    const preflight = await preflightClaude(context);
+    if (preflight !== 0) {
+      return preflight;
+    }
+  }
+
+  const { executor } = await createExecutorFromContext(context, { useCodex: parsed.useCodex, useClaude: parsed.useClaude });
+  warnRegistry(context, parsed.useCodex, parsed.useClaude);
   const result = await executor.resume(parsed.runId);
 
   printRun(context, result.run);
@@ -131,14 +145,23 @@ async function approveCommand(args: readonly string[], context: CommandContext):
     return 1;
   }
 
-  if (parsed.useCodex && !parsed.reject) {
-    const preflight = await preflightCodex(context);
-    if (preflight !== 0) {
-      return preflight;
+  if (!parsed.reject) {
+    if (parsed.useCodex) {
+      const preflight = await preflightCodex(context);
+      if (preflight !== 0) {
+        return preflight;
+      }
+    }
+
+    if (parsed.useClaude) {
+      const preflight = await preflightClaude(context);
+      if (preflight !== 0) {
+        return preflight;
+      }
     }
   }
 
-  const { executor } = await createExecutorFromContext(context, { useCodex: parsed.useCodex });
+  const { executor } = await createExecutorFromContext(context, { useCodex: parsed.useCodex, useClaude: parsed.useClaude });
   const decided = await executor.decide(parsed.runId, {
     decision: parsed.reject ? "rejected" : "approved",
     ...(parsed.note === undefined ? {} : { note: parsed.note })
@@ -150,7 +173,7 @@ async function approveCommand(args: readonly string[], context: CommandContext):
     return 0;
   }
 
-  warnRegistry(context, parsed.useCodex);
+  warnRegistry(context, parsed.useCodex, parsed.useClaude);
   const result = await executor.resume(parsed.runId);
   printRun(context, result.run);
   printSteps(context, result.run);
@@ -205,6 +228,7 @@ type ParsedExecuteArgs = {
   request: string;
   dryRun: boolean;
   useCodex: boolean;
+  useClaude: boolean;
   workflowId?: string;
   projectId?: string;
 };
@@ -213,6 +237,7 @@ function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefine
   const requestParts: string[] = [];
   let dryRun = false;
   let useCodex = false;
+  let useClaude = false;
   let workflowId: string | undefined;
   let projectId: string | undefined;
 
@@ -226,6 +251,11 @@ function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefine
 
     if (arg === "--codex") {
       useCodex = true;
+      continue;
+    }
+
+    if (arg === "--claude") {
+      useClaude = true;
       continue;
     }
 
@@ -256,11 +286,12 @@ function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefine
   }
 
   return workflowId === undefined && projectId === undefined
-    ? { request, dryRun, useCodex }
+    ? { request, dryRun, useCodex, useClaude }
     : {
         request,
         dryRun,
         useCodex,
+        useClaude,
         ...(workflowId === undefined ? {} : { workflowId }),
         ...(projectId === undefined ? {} : { projectId })
       };
@@ -270,12 +301,14 @@ type ParsedApproveArgs = {
   runId: string;
   reject: boolean;
   useCodex: boolean;
+  useClaude: boolean;
   note?: string;
 };
 
 function parseApproveArgs(args: readonly string[]): ParsedApproveArgs | undefined {
   let reject = false;
   let useCodex = false;
+  let useClaude = false;
   let note: string | undefined;
   const positional: string[] = [];
 
@@ -289,6 +322,11 @@ function parseApproveArgs(args: readonly string[]): ParsedApproveArgs | undefine
 
     if (arg === "--codex") {
       useCodex = true;
+      continue;
+    }
+
+    if (arg === "--claude") {
+      useClaude = true;
       continue;
     }
 
@@ -311,21 +349,30 @@ function parseApproveArgs(args: readonly string[]): ParsedApproveArgs | undefine
     return undefined;
   }
 
-  return note === undefined ? { runId: positional[0], reject, useCodex } : { runId: positional[0], reject, useCodex, note };
+  return note === undefined
+    ? { runId: positional[0], reject, useCodex, useClaude }
+    : { runId: positional[0], reject, useCodex, useClaude, note };
 }
 
-type ParsedRunIdWithCodex = {
+type ParsedRunIdWithWorkers = {
   runId: string;
   useCodex: boolean;
+  useClaude: boolean;
 };
 
-function parseRunIdWithCodex(args: readonly string[]): ParsedRunIdWithCodex | undefined {
+function parseRunIdWithWorkers(args: readonly string[]): ParsedRunIdWithWorkers | undefined {
   let useCodex = false;
+  let useClaude = false;
   const positional: string[] = [];
 
   for (const arg of args) {
     if (arg === "--codex") {
       useCodex = true;
+      continue;
+    }
+
+    if (arg === "--claude") {
+      useClaude = true;
       continue;
     }
 
@@ -342,11 +389,20 @@ function parseRunIdWithCodex(args: readonly string[]): ParsedRunIdWithCodex | un
 
   return {
     runId: positional[0],
-    useCodex
+    useCodex,
+    useClaude
   };
 }
 
-async function createExecutorFromContext(context: CommandContext, options: { useCodex: boolean } = { useCodex: false }): Promise<{ executor: RunExecutor }> {
+type WorkerSelection = {
+  useCodex: boolean;
+  useClaude: boolean;
+};
+
+async function createExecutorFromContext(
+  context: CommandContext,
+  options: WorkerSelection = { useCodex: false, useClaude: false }
+): Promise<{ executor: RunExecutor }> {
   const workflows = await loadWorkflows({ cwd: context.cwd });
   const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
   const runService = new RunService({ artifactStore, workflows });
@@ -360,9 +416,12 @@ function createExecutor(
   artifactStore: ArtifactStore,
   runService: RunService,
   workflows: Awaited<ReturnType<typeof loadWorkflows>>,
-  options: { useCodex: boolean } = { useCodex: false }
+  options: WorkerSelection = { useCodex: false, useClaude: false }
 ): RunExecutor {
-  const { registry } = options.useCodex ? createCodexWorkerRegistry({ runner: context.runner }) : createDefaultWorkerRegistry();
+  const { registry } =
+    options.useCodex || options.useClaude
+      ? createWorkerRegistry({ codex: options.useCodex, claude: options.useClaude, runner: context.runner })
+      : createDefaultWorkerRegistry();
   return new RunExecutor({
     runService,
     runStore: new RunStore({ artifactStore }),
@@ -399,14 +458,18 @@ function warnStub(context: CommandContext): void {
   context.stderr(`Warning: using StubWorker for ${stubRoles.join(", ")}.`);
 }
 
-function warnRegistry(context: CommandContext, useCodex: boolean): void {
-  if (!useCodex) {
+function warnRegistry(context: CommandContext, useCodex: boolean, useClaude: boolean): void {
+  if (!useCodex && !useClaude) {
     warnStub(context);
     return;
   }
 
-  const { codexRoles, stubRoles } = createCodexWorkerRegistry();
-  context.stderr(`Warning: using CodexExecAdapter for ${codexRoles.join(", ")}; StubWorker for ${stubRoles.join(", ")}.`);
+  const { codexRoles, claudeRoles, stubRoles } = createWorkerRegistry({ codex: useCodex, claude: useClaude });
+  const actuals = [
+    codexRoles.length === 0 ? undefined : `CodexExecAdapter for ${codexRoles.join(", ")}`,
+    claudeRoles.length === 0 ? undefined : `ClaudeCodeAdapter for ${claudeRoles.join(", ")}`
+  ].filter((message): message is string => message !== undefined);
+  context.stderr(`Warning: using ${actuals.join("; ")}; StubWorker for ${stubRoles.join(", ")}.`);
 }
 
 async function preflightCodex(context: CommandContext): Promise<CommandResult> {
@@ -420,6 +483,17 @@ async function preflightCodex(context: CommandContext): Promise<CommandResult> {
   return 1;
 }
 
+async function preflightClaude(context: CommandContext): Promise<CommandResult> {
+  const result = await checkClaude(context.runner, { cwd: context.cwd });
+  if (result.available) {
+    return 0;
+  }
+
+  const prefix = result.reason === "not-installed" ? "Claude not installed or not on PATH" : "Claude command returned an error";
+  context.stderr(`${prefix}: ${result.message}`);
+  return 1;
+}
+
 function isTerminalRun(run: Run): boolean {
   return run.status === "completed" || run.status === "failed" || run.status === "cancelled";
 }
@@ -427,10 +501,10 @@ function isTerminalRun(run: Run): boolean {
 function runUsage(): string {
   return [
     "Usage:",
-    "  baton run <request> [--dry-run] [--codex] [--workflow <id>] [--project <id>]",
+    "  baton run <request> [--dry-run] [--codex] [--claude] [--workflow <id>] [--project <id>]",
     "  baton run status <runId>",
-    "  baton run resume <runId> [--codex]",
-    "  baton run approve <runId> [--codex] [--reject] [--note <text>]",
+    "  baton run resume <runId> [--codex] [--claude]",
+    "  baton run approve <runId> [--codex] [--claude] [--reject] [--note <text>]",
     "  baton run clean <runId>"
   ].join("\n");
 }

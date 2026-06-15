@@ -15,7 +15,8 @@ describe("security regressions", () => {
       new RegExp(`auth[.]json`, "u"),
       new RegExp(`[.]codex`, "u"),
       new RegExp(`creden${"tial"}`, "iu"),
-      new RegExp(`danger-${"full"}-${"access"}`, "u")
+      new RegExp(`danger-${"full"}-${"access"}`, "u"),
+      new RegExp(`${escapeRegExp([".clau", "de"].join(""))}.*${["to", "ken"].join("")}`, "iu")
     ];
 
     for (const pattern of blockedPatterns) {
@@ -29,6 +30,7 @@ describe("security regressions", () => {
     expect(content).toContain(".baton/runs/*");
     expect(content).not.toContain(".baton/runs/\n");
     expect(content).toContain("!.baton/runs/codex-exec-v0.3/");
+    expect(content).toContain("!.baton/runs/claude-adapter-v0.4/");
   });
 });
 
@@ -45,4 +47,8 @@ async function sourceFiles(directory: string): Promise<string[]> {
   );
 
   return files.flat();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

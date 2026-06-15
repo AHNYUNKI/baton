@@ -264,6 +264,8 @@ export class RunExecutor {
         metadata: {
           runId: run.id,
           stepId: step.id,
+          stepType: step.type,
+          role: step.role,
           runDirectory: this.artifactStore.getRunDir(run.id)
         },
         ...(timeoutMs === undefined ? {} : { timeoutMs })

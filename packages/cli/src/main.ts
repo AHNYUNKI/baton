@@ -50,7 +50,9 @@ export async function runCli(argv: readonly string[], options: CliOptions = {}):
       case "run":
         return await runCommand(args, context);
       case "codex":
-        return await doctorCommand(args, context);
+        return await doctorCommand("codex", args, context);
+      case "claude":
+        return await doctorCommand("claude", args, context);
       default:
         stderr(`Unknown command: ${command ?? ""}`);
         stderr(usage());
@@ -72,12 +74,13 @@ export function usage(): string {
     "  baton project list",
     "  baton agent list",
     "  baton workflow list",
-    "  baton run <request> [--dry-run] [--codex]",
+    "  baton run <request> [--dry-run] [--codex] [--claude]",
     "  baton run status <runId>",
-    "  baton run resume <runId> [--codex]",
-    "  baton run approve <runId> [--codex] [--reject]",
+    "  baton run resume <runId> [--codex] [--claude]",
+    "  baton run approve <runId> [--codex] [--claude] [--reject]",
     "  baton run clean <runId>",
-    "  baton codex doctor"
+    "  baton codex doctor",
+    "  baton claude doctor"
   ].join("\n");
 }
 

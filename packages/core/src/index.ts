@@ -15,6 +15,7 @@ export * from "./workers/WorkerRegistry.js";
 export * from "./workers/StubWorker.js";
 export * from "./workers/codex/types.js";
 export * from "./workers/codex/CodexExecAdapter.js";
+export * from "./workers/claude/ClaudeCodeAdapter.js";
 export * from "./policies/ApprovalPolicy.js";
 export * from "./runs/RunService.js";
 export * from "./runs/RunStore.js";

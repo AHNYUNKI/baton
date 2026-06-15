@@ -110,6 +110,13 @@ describe("RunExecutor", () => {
     expect(result.run.status).toBe("completed");
     expect(result.run.steps.map((step) => step.status)).toEqual(["completed", "completed"]);
     expect(calls.map((call) => call.cwd)).toEqual([harness.worktreePath, harness.worktreePath]);
+    expect(calls[0]?.metadata).toMatchObject({
+      runId: "run-1",
+      stepId: "analyze",
+      stepType: "analyze",
+      role: "analyst",
+      runDirectory: harness.artifactStore.getRunDir("run-1")
+    });
     expect(harness.worktreeManager.createWorktree).toHaveBeenCalledTimes(1);
     expect(harness.worktreeManager.createWorktree).toHaveBeenCalledWith({
       runId: "run-1",
