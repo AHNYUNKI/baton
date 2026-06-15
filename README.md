@@ -1,9 +1,9 @@
 # Baton
 
-Baton is a local-first AI development orchestrator. The v0.3 MVP extends the CLI
+Baton is a local-first AI development orchestrator. The v0.4 MVP extends the CLI
 from dry-run planning into a safe, resumable run loop with worktree isolation,
 approval gates, per-step logs, artifacts, mockable worker dispatch, and opt-in
-Codex execution for implementation roles.
+Codex/Claude execution for role-specific workers.
 
 ## Packages
 
@@ -22,12 +22,15 @@ baton agent list
 baton workflow list
 baton run "<request>"
 baton run "<request>" --codex
+baton run "<request>" --claude
+baton run "<request>" --codex --claude
 baton run "<request>" --dry-run
 baton run status <runId>
-baton run resume <runId> [--codex]
-baton run approve <runId> [--codex] [--reject]
+baton run resume <runId> [--codex] [--claude]
+baton run approve <runId> [--codex] [--claude] [--reject]
 baton run clean <runId>
 baton codex doctor
+baton claude doctor
 ```
 
 `run --dry-run` creates `.baton/runs/<runId>/request.md` and `run.json`, then
@@ -50,12 +53,27 @@ run artifacts as `steps/<stepId>.prompt.md`. Baton does not read local Codex
 auth files; it relies on the official Codex CLI and the user's existing auth
 flow.
 
+`run "<request>" --claude` opts into real Claude Code execution for `analyst`,
+`architect`, and `reviewer` only. Baton runs `claude --version` before creating
+run state or a worktree. Claude prompts are passed through stdin, recorded as
+`steps/<stepId>.prompt.md`, and the captured stdout is written to role artifacts:
+`analysis.md`, `design.md`, or `review.md` based on the workflow step type.
+The default Claude adapter args are read-only oriented (`--print`) and do not
+include write/edit or broad access flags.
+
+`--codex --claude` can be combined: Claude handles analysis/design/review roles,
+Codex handles implementation/fix roles, and every other role remains stubbed.
+
 Approval gates pause execution with status `awaiting-approval`. Continue with:
 
 ```bash
 baton run approve <runId>
 baton run approve <runId> --codex
+baton run approve <runId> --claude
+baton run approve <runId> --codex --claude
 baton run resume <runId> --codex
+baton run resume <runId> --claude
+baton run resume <runId> --codex --claude
 ```
 
 Reject a pending gate with:
@@ -77,40 +95,45 @@ runs are refused.
 
 ## Safety Model
 
-- Real Codex execution is opt-in with `--codex`; default runs are stubbed.
-- `--codex` performs preflight before run/worktree creation.
+- Real provider execution is opt-in with `--codex`, `--claude`, or both; default
+  runs are stubbed.
+- `--codex` and `--claude` perform preflight before run/worktree creation.
+- Claude is only registered for `analyst`, `architect`, and `reviewer`.
 - Implementation and fix steps still pass through approval gates.
 - Workers run with `cwd` set to the run worktree path.
 - The default Codex sandbox is `workspace-write`.
+- The default Claude adapter uses non-mutating print mode and avoids write/edit
+  or broad access flags.
 - Automated tests mock process and worktree operations; they do not invoke real
-  Codex or git.
+  Claude, Codex, or git.
 
 ## Development
 
 ```bash
-pnpm install
-pnpm typecheck
-pnpm test
-pnpm build
+corepack pnpm install
+corepack pnpm typecheck
+corepack pnpm test
+corepack pnpm build
 node packages/cli/dist/main.js --help
 ```
 
 Runtime dependencies are intentionally limited to `zod` and `yaml`; the rest are
 development tools for TypeScript and tests.
 
-## v0.3 Non-Goals
+## v0.4 Non-Goals
 
 - macOS app, web service, or deployment automation.
 - Real SQLite persistence.
 - Automatic worktree cleanup.
 - Push, deploy, or package-installing command paths.
 - ESLint or Prettier configuration.
-- Claude Code, OpenAI Responses, or local-model worker adapters.
+- OpenAI Responses or local-model worker adapters.
+- Claude multi-turn sessions, MCP integration, and automatic diff capture.
 
 ## Follow-Up TODOs
 
 - Add an actual SQLite driver and migration runner behind `DbClient`.
-- Add Claude Code and OpenAI Responses adapters behind the worker interface.
+- Add OpenAI Responses adapters behind the worker interface.
 - Capture worktree diffs as first-class run artifacts.
 - Add optional automatic cleanup policies for retained worktrees.
 - Add ESLint after the MVP surface settles.

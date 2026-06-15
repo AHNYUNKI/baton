@@ -5,3 +5,4 @@ coverage/
 .baton/runs/*
 !.baton/runs/bootstrap-v0.1/
 !.baton/runs/codex-exec-v0.3/
+!.baton/runs/claude-adapter-v0.4/

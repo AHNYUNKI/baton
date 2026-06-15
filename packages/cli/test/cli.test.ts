@@ -5,12 +5,20 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { ArtifactStore, CodexExecAdapter, RunStore, StubWorker, createMockProcessRunner, fixedClock } from "@baton/core";
+import {
+  ArtifactStore,
+  ClaudeCodeAdapter,
+  CodexExecAdapter,
+  RunStore,
+  StubWorker,
+  createMockProcessRunner,
+  fixedClock
+} from "@baton/core";
 import type { ProcessRunner } from "@baton/core";
 import type { AgentRole, Run } from "@baton/schemas";
 
 import { runCli } from "../src/main.js";
-import { createCodexWorkerRegistry, createDefaultWorkerRegistry } from "../src/registry.js";
+import { createCodexWorkerRegistry, createDefaultWorkerRegistry, createWorkerRegistry } from "../src/registry.js";
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 
@@ -92,6 +100,7 @@ describe("@baton/cli", () => {
     expect(output.join("\n")).toContain("completed");
     expect(errors.join("\n")).toContain("StubWorker");
     expect(mock.calls.some((call) => call.command === "codex")).toBe(false);
+    expect(mock.calls.some((call) => call.command === "claude")).toBe(false);
     const runs = await readdir(path.join(cwd, ".baton", "runs"));
     const runId = runs[0] ?? "";
     expect(mock.calls[0]?.args).toEqual(["worktree", "add", path.join(cwd, ".baton", "worktrees", runId), "-b", `baton/${runId}`, "main"]);
@@ -216,10 +225,47 @@ describe("@baton/cli", () => {
     expect(commandErrors.join("\n")).toContain("returned an error");
   });
 
-  it("keeps the default registry stubbed and limits the codex registry to implementation roles", () => {
+  it("checks claude availability through ProcessRunner", async () => {
+    const mock = createMockProcessRunner([{ stdout: "claude 1.0.0\n", stderr: "", exitCode: 0, durationMs: 4 }]);
+    const output: string[] = [];
+
+    const code = await runCli(["claude", "doctor"], {
+      cwd: repoRoot,
+      runner: mock.runner,
+      stdout: (line) => output.push(line)
+    });
+
+    expect(code).toBe(0);
+    expect(output.join("\n")).toContain("Claude available");
+    expect(mock.calls[0]).toEqual({
+      command: "claude",
+      args: ["--version"],
+      options: { cwd: repoRoot, timeoutMs: 5000 }
+    });
+  });
+
+  it("distinguishes missing claude from a command error", async () => {
+    const missingRunner: ProcessRunner = {
+      async run(): Promise<never> {
+        throw new Error("spawn claude ENOENT");
+      }
+    };
+    const missingErrors: string[] = [];
+    expect(await runCli(["claude", "doctor"], { cwd: repoRoot, runner: missingRunner, stderr: (line) => missingErrors.push(line) })).toBe(1);
+    expect(missingErrors.join("\n")).toContain("not installed");
+
+    const errorMock = createMockProcessRunner([{ stdout: "", stderr: "bad config", exitCode: 2, durationMs: 4 }]);
+    const commandErrors: string[] = [];
+    expect(await runCli(["claude", "doctor"], { cwd: repoRoot, runner: errorMock.runner, stderr: (line) => commandErrors.push(line) })).toBe(1);
+    expect(commandErrors.join("\n")).toContain("returned an error");
+  });
+
+  it("keeps the default registry stubbed and limits provider registries to their roles", () => {
     const roles: AgentRole[] = ["analyst", "architect", "implementer", "tester", "reviewer", "fixer", "release_writer"];
     const defaults = createDefaultWorkerRegistry();
     const codex = createCodexWorkerRegistry();
+    const claude = createWorkerRegistry({ claude: true });
+    const combined = createWorkerRegistry({ codex: true, claude: true });
 
     for (const role of roles) {
       expect(defaults.registry.resolve(role)).toBeInstanceOf(StubWorker);
@@ -231,6 +277,16 @@ describe("@baton/cli", () => {
     expect(codex.registry.resolve("tester")).toBeInstanceOf(StubWorker);
     expect(codex.registry.resolve("reviewer")).toBeInstanceOf(StubWorker);
     expect(codex.registry.resolve("release_writer")).toBeInstanceOf(StubWorker);
+    expect(claude.registry.resolve("analyst")).toBeInstanceOf(ClaudeCodeAdapter);
+    expect(claude.registry.resolve("architect")).toBeInstanceOf(ClaudeCodeAdapter);
+    expect(claude.registry.resolve("reviewer")).toBeInstanceOf(ClaudeCodeAdapter);
+    expect(claude.registry.resolve("implementer")).toBeInstanceOf(StubWorker);
+    expect(combined.registry.resolve("analyst")).toBeInstanceOf(ClaudeCodeAdapter);
+    expect(combined.registry.resolve("architect")).toBeInstanceOf(ClaudeCodeAdapter);
+    expect(combined.registry.resolve("reviewer")).toBeInstanceOf(ClaudeCodeAdapter);
+    expect(combined.registry.resolve("implementer")).toBeInstanceOf(CodexExecAdapter);
+    expect(combined.registry.resolve("fixer")).toBeInstanceOf(CodexExecAdapter);
+    expect(combined.stubRoles).toEqual(["tester", "release_writer"]);
   });
 
   it("does not create a run or worktree when codex preflight fails", async () => {
@@ -250,6 +306,64 @@ describe("@baton/cli", () => {
     expect(mock.calls).toHaveLength(1);
     expect(mock.calls[0]?.command).toBe("codex");
     await expect(readdir(path.join(cwd, ".baton", "runs"))).rejects.toThrow();
+  });
+
+  it("does not create a run or worktree when claude preflight fails", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-claude-fail-"));
+    await writeWorkflow(cwd, ["analyze"]);
+    const errors: string[] = [];
+    const mock = createMockProcessRunner([{ stdout: "", stderr: "missing", exitCode: 1, durationMs: 2 }]);
+
+    const code = await runCli(["run", "Build", "--claude"], {
+      cwd,
+      runner: mock.runner,
+      stderr: (line) => errors.push(line)
+    });
+
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("returned an error");
+    expect(mock.calls).toHaveLength(1);
+    expect(mock.calls[0]?.command).toBe("claude");
+    await expect(readdir(path.join(cwd, ".baton", "runs"))).rejects.toThrow();
+  });
+
+  it("runs claude for analysis and design roles when opted in", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-claude-"));
+    await writeWorkflow(cwd, ["analyze", "design"]);
+    const output: string[] = [];
+    const errors: string[] = [];
+    const mock = createMockProcessRunner([
+      { stdout: "claude 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "", stderr: "", exitCode: 0, durationMs: 2 },
+      { stdout: "# Analysis", stderr: "", exitCode: 0, durationMs: 3 },
+      { stdout: "# Design", stderr: "", exitCode: 0, durationMs: 4 }
+    ]);
+
+    expect(
+      await runCli(["run", "Build", "Baton", "--claude"], {
+        cwd,
+        runner: mock.runner,
+        stdout: (line) => output.push(line),
+        stderr: (line) => errors.push(line)
+      })
+    ).toBe(0);
+
+    const runs = await readdir(path.join(cwd, ".baton", "runs"));
+    const runId = runs[0] ?? "";
+    const worktreePath = path.join(cwd, ".baton", "worktrees", runId);
+    const claudeExecCalls = mock.calls.filter((call) => call.command === "claude" && call.args[0] === "--print");
+
+    expect(output.join("\n")).toContain("completed");
+    expect(errors.join("\n")).toContain("ClaudeCodeAdapter");
+    expect(mock.calls[0]).toMatchObject({ command: "claude", args: ["--version"] });
+    expect(claudeExecCalls).toHaveLength(2);
+    expect(claudeExecCalls.map((call) => call.options?.cwd)).toEqual([worktreePath, worktreePath]);
+    expect(claudeExecCalls[0]?.options?.input).toContain("Step: analyze");
+    expect(claudeExecCalls[1]?.options?.input).toContain("Step: design");
+    expect(claudeExecCalls[0]?.args.join(" ")).not.toMatch(/write|edit|danger|full.access/i);
+    expect(await readFile(path.join(cwd, ".baton", "runs", runId, "analysis.md"), "utf8")).toBe("# Analysis");
+    expect(await readFile(path.join(cwd, ".baton", "runs", runId, "design.md"), "utf8")).toBe("# Design");
+    expect(mock.calls.some((call) => call.command === "codex")).toBe(false);
   });
 
   it("runs codex after approval inside the run worktree when opted in", async () => {
@@ -296,6 +410,55 @@ describe("@baton/cli", () => {
     expect(await readFile(path.join(cwd, ".baton", "runs", runId, "steps", "implement.prompt.md"), "utf8")).toContain("Build");
   });
 
+  it("combines claude analysis with codex implementation roles", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-combined-"));
+    await writeWorkflow(cwd, ["analyze", "implement"]);
+    const output: string[] = [];
+    const errors: string[] = [];
+    const mock = createMockProcessRunner([
+      { stdout: "codex 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "claude 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "", stderr: "", exitCode: 0, durationMs: 2 },
+      { stdout: "# Analysis", stderr: "", exitCode: 0, durationMs: 3 },
+      { stdout: "codex 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "claude 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "implemented", stderr: "", exitCode: 0, durationMs: 4 }
+    ]);
+
+    expect(
+      await runCli(["run", "Build", "--codex", "--claude"], {
+        cwd,
+        runner: mock.runner,
+        stdout: (line) => output.push(line),
+        stderr: (line) => errors.push(line)
+      })
+    ).toBe(0);
+
+    const runs = await readdir(path.join(cwd, ".baton", "runs"));
+    const runId = runs[0] ?? "";
+    const worktreePath = path.join(cwd, ".baton", "worktrees", runId);
+    expect(output.join("\n")).toContain("awaiting-approval");
+    expect(errors.join("\n")).toContain("CodexExecAdapter");
+    expect(errors.join("\n")).toContain("ClaudeCodeAdapter");
+
+    output.length = 0;
+    expect(
+      await runCli(["run", "approve", runId, "--codex", "--claude"], {
+        cwd,
+        runner: mock.runner,
+        stdout: (line) => output.push(line),
+        stderr: (line) => errors.push(line)
+      })
+    ).toBe(0);
+
+    const claudeExecCall = mock.calls.find((call) => call.command === "claude" && call.args[0] === "--print");
+    const codexExecCall = mock.calls.find((call) => call.command === "codex" && call.args[0] === "exec");
+    expect(claudeExecCall?.options?.cwd).toBe(worktreePath);
+    expect(claudeExecCall?.options?.input).toContain("Step: analyze");
+    expect(codexExecCall?.options?.cwd).toBe(worktreePath);
+    expect(codexExecCall?.options?.input).toContain("Step: implement");
+  });
+
   it("supports resume with codex opt-in", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-codex-resume-"));
     await writeWorkflow(cwd, ["implement"]);
@@ -325,6 +488,37 @@ describe("@baton/cli", () => {
     const codexExecCall = mock.calls.find((call) => call.command === "codex" && call.args[0] === "exec");
     expect(codexExecCall?.options?.cwd).toBe(worktreePath);
     expect(codexExecCall?.options?.input).toContain("Build Baton");
+  });
+
+  it("supports resume with claude opt-in", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-claude-resume-"));
+    await writeWorkflow(cwd, ["analyze"]);
+    const artifactStore = new ArtifactStore({ workspaceRoot: cwd });
+    const runStore = new RunStore({ artifactStore, clock: fixedClock("2026-06-15T00:00:00.000Z") });
+    const worktreePath = path.join(cwd, ".baton", "worktrees", "run-1");
+    await artifactStore.writeArtifact("run-1", "request.md", "Build Baton\n");
+    await runStore.save({
+      id: "run-1",
+      request: "Build Baton",
+      workflowId: "default",
+      status: "running",
+      dryRun: false,
+      createdAt: "2026-06-15T00:00:00.000Z",
+      worktreePath,
+      baseBranch: "main",
+      steps: [{ id: "analyze", type: "analyze", status: "planned" }]
+    });
+    const mock = createMockProcessRunner([
+      { stdout: "claude 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "# Analysis", stderr: "", exitCode: 0, durationMs: 3 }
+    ]);
+
+    expect(await runCli(["run", "resume", "run-1", "--claude"], { cwd, runner: mock.runner })).toBe(0);
+
+    const claudeExecCall = mock.calls.find((call) => call.command === "claude" && call.args[0] === "--print");
+    expect(claudeExecCall?.options?.cwd).toBe(worktreePath);
+    expect(claudeExecCall?.options?.input).toContain("Build Baton");
+    expect(await readFile(path.join(cwd, ".baton", "runs", "run-1", "analysis.md"), "utf8")).toBe("# Analysis");
   });
 
   it("cleans only terminal run worktrees and preserves run state", async () => {
@@ -413,12 +607,20 @@ describe("@baton/cli", () => {
   });
 });
 
-async function writeWorkflow(cwd: string, stepIds: Array<"analyze" | "implement">): Promise<void> {
+type WorkflowStepId = "analyze" | "design" | "implement" | "review";
+
+async function writeWorkflow(cwd: string, stepIds: WorkflowStepId[]): Promise<void> {
   const workflowsDir = path.join(cwd, "examples", "workflows");
   await mkdir(workflowsDir, { recursive: true });
   const stepBlocks = stepIds.map((id) => {
     if (id === "implement") {
       return ["  - id: implement", "    name: Implement", "    type: implement", "    role: implementer"].join("\n");
+    }
+    if (id === "design") {
+      return ["  - id: design", "    name: Design", "    type: design", "    role: architect"].join("\n");
+    }
+    if (id === "review") {
+      return ["  - id: review", "    name: Review", "    type: review", "    role: reviewer"].join("\n");
     }
     return ["  - id: analyze", "    name: Analyze", "    type: analyze", "    role: analyst"].join("\n");
   });

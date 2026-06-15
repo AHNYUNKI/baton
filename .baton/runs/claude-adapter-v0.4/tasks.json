@@ -1,0 +1,61 @@
+{
+  "version": "1",
+  "runId": "claude-adapter-v0.4",
+  "buildsOn": "codex-exec-v0.3",
+  "tasks": [
+    {
+      "id": "task-301",
+      "title": "RunExecutor metadata: stepType + role",
+      "description": "RunExecutor가 worker.run에 전달하는 metadata에 stepType: step.type, role: step.role을 추가한다(기존 runId/stepId/runDirectory 유지). CodexExecAdapter는 미사용이라 무영향. 기존 실행/게이트/resume 테스트 회귀 없음 확인 + metadata 키 단언 테스트.",
+      "targetFiles": ["packages/core/src/runs/RunExecutor.ts", "packages/core/test/runExecutor.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-302",
+      "title": "ClaudeCodeAdapter (read-only)",
+      "description": "workers/claude/ClaudeCodeAdapter.ts: CodexExecAdapter 패턴. configurable command(기본 'claude')/args/sandbox·timeout. 기본 args는 비변경(읽기 전용)이며 write/edit/danger/full-access 플래그 없음. 프롬프트를 ProcessRunner input(stdin)으로 전달(argv 평문 금지). steps/<stepId>.prompt.md 프롬프트 아티팩트 + metadata.stepType별 출력 아티팩트(analyze→analysis.md, design→design.md, review→review.md; 비대상은 강제 안 함)를 runDirectory에 기록. exitCode!==0/timeout/예외 → success:false. Codex credential/Claude 세션 토큰 경로 미접근. 단위 테스트(stdin/읽기전용 args/산출물/실패 매핑/토큰 부재).",
+      "targetFiles": ["packages/core/src/workers/claude/ClaudeCodeAdapter.ts", "packages/core/src/index.ts", "packages/core/test/claudeCodeAdapter.test.ts"],
+      "dependencies": ["task-301"],
+      "acceptanceCriteria": ["AC-03", "AC-04", "AC-05", "AC-06", "AC-07", "AC-08"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-303",
+      "title": "checkClaude + claude doctor",
+      "description": "cli/commands/doctor.ts: checkClaude(runner)를 checkCodex 동형으로 추가(미설치 vs 오류 reason 구분). doctorCommand 또는 main 라우팅이 'codex doctor'와 'claude doctor'를 분기. 가용 시 버전+exit 0, 비가용 시 안내+exit 1. credential/세션 토큰 read 없음. 3경로 테스트.",
+      "targetFiles": ["packages/cli/src/commands/doctor.ts", "packages/cli/src/main.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-09", "AC-10", "AC-11"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-304",
+      "title": "Unified createWorkerRegistry",
+      "description": "cli/registry.ts: createWorkerRegistry({codex?,claude?,runner?})로 통합 — implementer/fixer→CodexExecAdapter(codex 시), analyst/architect/reviewer→ClaudeCodeAdapter(claude 시), 그 외 Stub. 반환에 codexRoles/claudeRoles/stubRoles 포함(경고용). 기존 createDefaultWorkerRegistry(전부 Stub)/createCodexWorkerRegistry(codex만)는 통합 함수 위임으로 유지(회귀). 조합/역할 분리 테스트.",
+      "targetFiles": ["packages/cli/src/registry.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-302"],
+      "acceptanceCriteria": ["AC-12", "AC-13", "AC-17"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-305",
+      "title": "CLI --claude opt-in + preflight + combine",
+      "description": "cli/commands/run.ts: --claude 플래그 파싱. --claude 시 run 시작 전 preflightClaude(checkClaude) → 실패면 안내+exit 1, worktree/RunStore 미생성. 성공 시 createWorkerRegistry({codex: useCodex, claude: useClaude, runner}) 주입. --codex와 조합 가능. resume/approve도 --claude/--codex 지원. 플래그 없으면 실제 claude/codex 호출 0회(회귀). 경고 메시지 갱신. 프리플라이트 무생성/역할 한정/조합 테스트.",
+      "targetFiles": ["packages/cli/src/commands/run.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-303", "task-304"],
+      "acceptanceCriteria": ["AC-14", "AC-15", "AC-16", "AC-18"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-306",
+      "title": ".gitignore + README + security + gates",
+      "description": ".gitignore에 '!.baton/runs/claude-adapter-v0.4/' 추가(설계 run 추적). README.md에 --claude/claude doctor/읽기 전용/안전 모델/--codex --claude 조합 문서화. 보안 회귀 테스트: auth.json/.codex/credential, Claude 세션 토큰(.claude*token류), danger-full-access 매치 0, 어댑터 기본 args write/danger 부재, cwd가 base/main 아님. 전체 게이트 + run --help 스모크, 자체 diff 리뷰, 최종 요약.",
+      "targetFiles": [".gitignore", "README.md", "packages/core/test/security.test.ts"],
+      "dependencies": ["task-305"],
+      "acceptanceCriteria": ["AC-19", "AC-20", "AC-21", "AC-22", "AC-23"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build", "node packages/cli/dist/main.js run --help"]
+    }
+  ]
+}
