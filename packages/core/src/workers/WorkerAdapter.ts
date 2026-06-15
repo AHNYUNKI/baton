@@ -12,6 +12,7 @@ export type WorkerRunResult = {
   stderr: string;
   durationMs: number;
   artifacts: string[];
+  metadata?: Record<string, unknown>;
 };
 
 export type WorkerAdapter = {

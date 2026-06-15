@@ -24,6 +24,18 @@ export type CreateRunOptions = {
   projectId?: string;
 };
 
+export type PlanRunOptions = {
+  dryRun: boolean;
+  workflowId?: string;
+  projectId?: string;
+};
+
+export type PlanRunResult = {
+  run: Run;
+  workflow: Workflow;
+  plannedSteps: RunStep[];
+};
+
 export type CreateRunResult = {
   run: Run;
   plannedSteps: RunStep[];
@@ -56,24 +68,7 @@ export class RunService {
       throw new Error("Baton v0.1 only supports dry-run planning.");
     }
 
-    const workflow = this.selectWorkflow(options.workflowId);
-    const runId = this.idGenerator();
-    const plannedSteps = workflow.steps.map<RunStep>((step) => ({
-      id: step.id,
-      type: step.type,
-      status: "planned"
-    }));
-
-    const baseRun = {
-      id: runId,
-      request,
-      workflowId: workflow.id,
-      status: "planned" as const,
-      dryRun: true,
-      createdAt: this.clock.now().toISOString(),
-      steps: plannedSteps
-    };
-    const run = RunSchema.parse(options.projectId === undefined ? baseRun : { ...baseRun, projectId: options.projectId });
+    const { run, plannedSteps } = this.planRun(request, options);
 
     const requestPath = await this.artifactStore.writeArtifact(run.id, "request.md", `${request}\n`);
     const runPath = await this.artifactStore.writeArtifact(run.id, "run.json", `${JSON.stringify(run, null, 2)}\n`);
@@ -85,6 +80,36 @@ export class RunService {
       run,
       plannedSteps,
       artifactPaths: [requestPath, runPath]
+    };
+  }
+
+  public planRun(request: string, options: PlanRunOptions): PlanRunResult {
+    if (request.trim().length === 0) {
+      throw new Error("Run request must not be empty.");
+    }
+
+    const workflow = this.selectWorkflow(options.workflowId);
+    const plannedSteps = workflow.steps.map<RunStep>((step) => ({
+      id: step.id,
+      type: step.type,
+      status: "planned"
+    }));
+
+    const baseRun = {
+      id: this.idGenerator(),
+      request,
+      workflowId: workflow.id,
+      status: "planned" as const,
+      dryRun: options.dryRun,
+      createdAt: this.clock.now().toISOString(),
+      steps: plannedSteps
+    };
+    const run = RunSchema.parse(options.projectId === undefined ? baseRun : { ...baseRun, projectId: options.projectId });
+
+    return {
+      run,
+      workflow,
+      plannedSteps
     };
   }
 

@@ -72,7 +72,10 @@ export function usage(): string {
     "  baton project list",
     "  baton agent list",
     "  baton workflow list",
-    "  baton run <request> --dry-run",
+    "  baton run <request> [--dry-run]",
+    "  baton run status <runId>",
+    "  baton run resume <runId>",
+    "  baton run approve <runId> [--reject]",
     "  baton codex doctor"
   ].join("\n");
 }

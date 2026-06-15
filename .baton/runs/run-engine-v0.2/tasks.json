@@ -1,0 +1,97 @@
+{
+  "version": "1",
+  "runId": "run-engine-v0.2",
+  "buildsOn": "bootstrap-v0.1",
+  "tasks": [
+    {
+      "id": "task-101",
+      "title": "Schema extensions (statuses, fields, approval)",
+      "description": "Additive 스키마 확장. run.schema.ts: RunStatus에 'awaiting-approval' 추가, RunStepStatus(planned|running|completed|failed|skipped) 신규 정의 후 RunStep.status에 적용, RunStep에 optional startedAt/completedAt/reason/artifacts(string[]), Run에 optional worktreePath/baseBranch/updatedAt. approval.schema.ts: optional decidedAt/note 추가. 모든 신규 필드 optional, enum은 값 추가만. 신규 필드 유/무 run.json 하위호환 + 새 상태/필드 단위 테스트.",
+      "targetFiles": ["packages/schemas/src/run.schema.ts", "packages/schemas/src/approval.schema.ts", "packages/schemas/test/schemas.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02", "AC-03", "AC-04", "AC-05"],
+      "testCommands": ["corepack pnpm --filter @baton/schemas test"]
+    },
+    {
+      "id": "task-102",
+      "title": "RunStore (atomic file persistence)",
+      "description": "runs/RunStore.ts: save(run)가 .baton/runs/<runId>/run.json을 임시파일→rename으로 원자적 기록(updatedAt 갱신), load(runId)가 Zod(RunSchema)로 검증 후 반환, 없으면 명확한 에러. ArtifactStore의 run 디렉터리 경로 규약 재사용. 라운드트립/원자성/에러 테스트.",
+      "targetFiles": ["packages/core/src/runs/RunStore.ts", "packages/core/test/runStore.test.ts"],
+      "dependencies": ["task-101"],
+      "acceptanceCriteria": ["AC-06", "AC-07"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-103",
+      "title": "ApprovalPolicy + WorkerRegistry + StubWorker",
+      "description": "policies/ApprovalPolicy.ts: requiresApproval(stepType), 기본 requiresApprovalFor=['implement','fix']. workers/WorkerRegistry.ts: register(role, adapter)/resolve(role). workers/StubWorker.ts: WorkerAdapter 구현, success=true에 결과/metadata.stub=true와 명시 메시지, 부수효과 없음. 각 단위 테스트.",
+      "targetFiles": ["packages/core/src/policies/ApprovalPolicy.ts", "packages/core/src/workers/WorkerRegistry.ts", "packages/core/src/workers/StubWorker.ts", "packages/core/test/approvalPolicy.test.ts", "packages/core/test/workerRegistry.test.ts", "packages/core/test/stubWorker.test.ts"],
+      "dependencies": ["task-101"],
+      "acceptanceCriteria": ["AC-12", "AC-27"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-104",
+      "title": "Extract RunService.planRun()",
+      "description": "RunService에서 workflow 선택 + RunStep 계획 전개 로직을 planRun(request, options)로 분리. createRun(dryRun)은 planRun을 사용하되 기존 공개 동작(상태 'planned', request.md+run.json 기록, non-dryRun throw)을 그대로 유지. 기존 runService.test.ts 회귀 없음 확인.",
+      "targetFiles": ["packages/core/src/runs/RunService.ts", "packages/core/test/runService.test.ts"],
+      "dependencies": ["task-101"],
+      "acceptanceCriteria": ["AC-20"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-105",
+      "title": "RunExecutor.start core loop",
+      "description": "runs/RunExecutor.ts: start(request, options) → planRun으로 run 생성(status 'running'), worktreeManager.createWorktree({runId, worktreePath=<batonHome>/worktrees/<runId>, baseBranch}) 1회, run.worktreePath/baseBranch 기록. step 순차 실행: registry.resolve(step.role) 없으면 skipped(reason), 있으면 running→worker.run({cwd: worktreePath, prompt: buildStepPrompt(...), timeoutMs})→logs/<stepId>.{stdout,stderr}.log + step 아티팩트 + step.started/completed 이벤트. worker success=false면 step failed, run failed, 잔여 skipped, throw 없음. 매 step 종료마다 RunStore.save. buildStepPrompt.ts(요청+step+아티팩트 포인터). happy/failure/skip + cwd==worktreePath + createWorktree 1회/브랜치 인자 테스트.",
+      "targetFiles": ["packages/core/src/runs/RunExecutor.ts", "packages/core/src/runs/buildStepPrompt.ts", "packages/core/test/runExecutor.test.ts"],
+      "dependencies": ["task-102", "task-103", "task-104"],
+      "acceptanceCriteria": ["AC-08", "AC-09", "AC-10", "AC-11", "AC-12", "AC-13"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-106",
+      "title": "Approval gate + decide",
+      "description": "RunExecutor: isGate(step)=step.type==='approve' || policy.requiresApproval(step.type). 게이트 step 도달 시 해당 (runId, stepId) 승인 레코드가 'approved'가 아니면 run.status='awaiting-approval' 영속화 후 반환(다운스트림 worker 호출 0회). approve 타입 step은 승인되면 worker 없이 completed. decide(runId, decision, note?)가 현재 대기 게이트 step의 Approval(approved/rejected, decidedAt) 기록·저장. rejected면 run 'cancelled' + 잔여 skipped. 미승인 worker 0회/거부 cancelled 테스트.",
+      "targetFiles": ["packages/core/src/runs/RunExecutor.ts", "packages/core/test/runExecutor.test.ts"],
+      "dependencies": ["task-105"],
+      "acceptanceCriteria": ["AC-14", "AC-15", "AC-16", "AC-25"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-107",
+      "title": "RunExecutor.resume",
+      "description": "resume(runId): RunStore.load 후 첫 비종료(completed/skipped/failed가 아닌) step부터 executeFrom 재진입. 이미 종료된 step의 worker는 재호출하지 않음(멱등). 승인 후 게이트 통과 계속. 중간 상태 resume 시 완료 step worker 재호출 0회 + 게이트 통과 후 종료 상태 테스트.",
+      "targetFiles": ["packages/core/src/runs/RunExecutor.ts", "packages/core/test/runExecutor.test.ts"],
+      "dependencies": ["task-106"],
+      "acceptanceCriteria": ["AC-17", "AC-18"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-108",
+      "title": "CLI run subcommands + default registry",
+      "description": "cli/registry.ts: 기본 WorkerRegistry 구성(미연결 역할은 StubWorker, 스텁 사용 시 경고 출력 가능하게). commands/run.ts: 'run <request>'(실행, --dry-run이면 기존 계획), 'run status <runId>', 'run resume <runId>', 'run approve <runId> [--reject]'(decide 후 resume). 결과 상태/아티팩트/게이트 안내 출력, 알 수 없는 서브커맨드/누락 인자는 사용법+비정상 종료. core 서비스 주입/mock CLI 테스트 + dry-run 회귀.",
+      "targetFiles": ["packages/cli/src/registry.ts", "packages/cli/src/commands/run.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-107"],
+      "acceptanceCriteria": ["AC-19", "AC-20", "AC-21", "AC-22", "AC-23", "AC-24", "AC-27"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-109",
+      "title": "Exports, README, security regression",
+      "description": "core/index.ts에 RunExecutor/RunStore/WorkerRegistry/ApprovalPolicy/StubWorker 재export. README.md에 실행/승인/재개 사용법과 v0.2 비목표/TODO(실제 Codex 실행, SQLite, worktree 정리). 보안 회귀 테스트: auth.json/.codex/credential 및 danger-full-access 매치 0, base/main 경로가 worker cwd로 전달되지 않음 단언.",
+      "targetFiles": ["packages/core/src/index.ts", "README.md", "packages/core/test/security.test.ts"],
+      "dependencies": ["task-108"],
+      "acceptanceCriteria": ["AC-26"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-110",
+      "title": "Full gates + smoke",
+      "description": "전체 게이트 실행 후 회귀 없음 확인. node packages/cli/dist/main.js run --help 스모크. 자체 diff 리뷰로 불필요한 변경 제거, 최종 요약 작성.",
+      "targetFiles": [],
+      "dependencies": ["task-109"],
+      "acceptanceCriteria": ["AC-28"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build", "node packages/cli/dist/main.js run --help"]
+    }
+  ]
+}

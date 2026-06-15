@@ -1,0 +1,15 @@
+import { describe, expect, it } from "vitest";
+
+import { StubWorker } from "../src/index.js";
+
+describe("StubWorker", () => {
+  it("returns a successful explicit stub result without side effects", async () => {
+    const result = await new StubWorker().run({ cwd: "/worktree", prompt: "Do the work" });
+
+    expect(result.success).toBe(true);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("StubWorker");
+    expect(result.stdout).toContain("stub: true");
+    expect(result.metadata).toMatchObject({ stub: true });
+  });
+});
