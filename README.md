@@ -1,9 +1,9 @@
 # Baton
 
-Baton is a local-first AI development orchestrator. The v0.4 MVP extends the CLI
+Baton is a local-first AI development orchestrator. The v0.6 MVP extends the CLI
 from dry-run planning into a safe, resumable run loop with worktree isolation,
-approval gates, per-step logs, artifacts, mockable worker dispatch, and opt-in
-Codex/Claude execution for role-specific workers.
+approval gates, per-step logs, artifacts, mockable worker dispatch, read-only run
+history lookup, and opt-in Codex/Claude execution for role-specific workers.
 
 ## Packages
 
@@ -25,6 +25,10 @@ baton run "<request>" --codex
 baton run "<request>" --claude
 baton run "<request>" --codex --claude
 baton run "<request>" --dry-run
+baton run list
+baton run list --status completed --limit 10
+baton run list --json
+baton run show <runId>
 baton run status <runId>
 baton run resume <runId> [--codex] [--claude]
 baton run approve <runId> [--codex] [--claude] [--reject]
@@ -93,6 +97,48 @@ baton run clean <runId>
 `run clean` removes only the worktree path recorded in `run.json`, preserves the
 run artifact directory, and records `cleanedAt`. Active or awaiting-approval
 runs are refused.
+
+## Run History Lookup
+
+Use `run list` to inspect persisted local run history without changing run state:
+
+```bash
+baton run list
+baton run list --status completed
+baton run list --limit 10
+baton run list --status failed --json
+```
+
+The table view shows run id, status, workflow id, creation time, step count, and
+terminal outcome when one exists. Results are sorted by `createdAt` descending,
+then by run id ascending for deterministic output. Missing or invalid run
+directories are skipped and reported with a skipped count instead of being hidden.
+
+`--json` prints a stable JSON array with these fields:
+
+```json
+[
+  {
+    "runId": "run-123",
+    "status": "completed",
+    "dryRun": false,
+    "workflowId": "default",
+    "createdAt": "2026-06-15T00:00:00.000Z",
+    "updatedAt": "2026-06-15T00:01:00.000Z",
+    "stepCount": 3,
+    "outcome": "completed"
+  }
+]
+```
+
+Use `run show` for a detailed read-only view of one run:
+
+```bash
+baton run show <runId>
+```
+
+It prints the request, step timings and reasons, approvals, worktree and cleanup
+metadata, and the files currently stored in `.baton/runs/<runId>/`.
 
 ## Obsidian Journal Export
 

@@ -1,0 +1,53 @@
+{
+  "version": "1",
+  "runId": "run-history-v0.6",
+  "buildsOn": "obsidian-journal-v0.5",
+  "baseBranch": "origin/main",
+  "tasks": [
+    {
+      "id": "task-501",
+      "title": "core listRuns + summarizeRuns",
+      "description": "packages/core/src/runs/listRuns.ts: listRuns({cwd, status?, limit?}) → { runs: LoadedRun[], skipped: number }. <cwd>/.baton/runs/*/run.json을 읽어 RunSchema.safeParse, 실패/부재는 skipped++. 정렬은 createdAt 내림차순, 동률 시 runId 오름차순(결정적). status 필터 후 limit 절단. summarizeRuns(runs) → { total, byStatus }. LoadedRun={run,directory}. core index.ts 재export. 정렬/필터/limit/손상 skip+개수/빈 상태 단위 테스트(임시 .baton).",
+      "targetFiles": ["packages/core/src/runs/listRuns.ts", "packages/core/src/index.ts", "packages/core/test/listRuns.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02", "AC-03", "AC-04", "AC-05", "AC-06"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-502",
+      "title": "Refactor journal.ts to core listRuns",
+      "description": "packages/cli/src/commands/journal.ts: 자체 loadRuns/loadRunsWithDirectories 스캔 로직 제거 후 core listRuns 사용(정렬·필터 의미 동일 유지). journal sync/auto-export 동작 동일. 기존 v0.5 journal 테스트 회귀 없음 확인.",
+      "targetFiles": ["packages/cli/src/commands/journal.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-501"],
+      "acceptanceCriteria": ["AC-07"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-503",
+      "title": "CLI run list",
+      "description": "packages/cli/src/commands/run.ts: case 'list' + runListCommand. listRuns로 표 출력(runId, status, workflow, 생성일, step 수, outcome) createdAt 내림차순. --status <s>/--limit <n>/--json 지원. --json은 고정 필드 스키마(runId/status/dryRun/workflowId/createdAt/updatedAt?/stepCount/outcome?) JSON 배열. skipped>0이면 'N skipped' 표기. run 없으면 빈 상태 안내+exit 0. 잘못된 인자는 사용법+비정상 종료. 표/필터/limit/json/skip/빈상태 테스트.",
+      "targetFiles": ["packages/cli/src/commands/run.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-501"],
+      "acceptanceCriteria": ["AC-08", "AC-09", "AC-10", "AC-11"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-504",
+      "title": "CLI run show",
+      "description": "packages/cli/src/commands/run.ts: case 'show' + runShowCommand. RunStore.load(runId)로 상세 출력 — 요청, step 표(id/type/status/startedAt/completedAt/reason), 승인(approvals), worktreePath/cleanedAt, ArtifactStore.getRunDir의 아티팩트 파일 목록. 없는 runId → 명확한 에러+비정상 종료. 기존 run status <runId> 하위호환 유지(printRun/printSteps 재사용). 상세/없는 runId/status 회귀 테스트.",
+      "targetFiles": ["packages/cli/src/commands/run.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-503"],
+      "acceptanceCriteria": ["AC-12", "AC-13", "AC-14"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-505",
+      "title": "README + safety + gates",
+      "description": "packages/cli/src/main.ts help 갱신(필요 시). README.md에 run list/run show/--json 문서화. 보안·읽기전용 회귀 테스트: list/show/listRuns 경로에 쓰기/삭제 호출 없음 단언, credential/세션 토큰/danger 매치 0. 전체 게이트(v0.1~v0.6 회귀 없음) + run --help 스모크, 자체 diff 리뷰, 최종 요약.",
+      "targetFiles": ["packages/cli/src/main.ts", "README.md", "packages/core/test/security.test.ts"],
+      "dependencies": ["task-504"],
+      "acceptanceCriteria": ["AC-15", "AC-16", "AC-17", "AC-18"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build", "node packages/cli/dist/main.js run --help"]
+    }
+  ]
+}

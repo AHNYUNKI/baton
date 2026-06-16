@@ -1,23 +1,17 @@
-import type { Dirent } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
 import {
   ObsidianJournalExporter,
+  listRuns,
   loadWorkflows,
   resolveObsidianVault,
-  runsDir,
   workspaceDir,
   type ObsidianVaultConfig
 } from "@baton/core";
-import { RunSchema, type AgentRole, type JournalWorkerKind, type Run, type Workflow, type WorkflowStepType } from "@baton/schemas";
+import type { AgentRole, JournalWorkerKind, Run, Workflow, WorkflowStepType } from "@baton/schemas";
 
 import type { CommandContext, CommandResult } from "./context.js";
-
-type LoadedRun = {
-  run: Run;
-  runDirectory: string;
-};
 
 export type JournalWorkers = Partial<Record<AgentRole, JournalWorkerKind>>;
 
@@ -41,16 +35,16 @@ export async function journalCommand(args: readonly string[], context: CommandCo
     }
 
     const workflows = await loadWorkflows({ cwd: context.cwd });
-    const runs = await loadRunsWithDirectories(context.cwd);
+    const { runs } = await listRuns({ cwd: context.cwd });
     const exporter = new ObsidianJournalExporter();
     for (const loadedRun of runs) {
       const workflow = workflowForRun(loadedRun.run, workflows);
       await exporter.exportRun(loadedRun.run, {
         vaultPath,
-        runDirectory: loadedRun.runDirectory,
+        runDirectory: loadedRun.directory,
         clock: context.clock,
         ...(workflow === undefined ? {} : { workflow }),
-        workers: await inferJournalWorkers(loadedRun.run, loadedRun.runDirectory, workflow)
+        workers: await inferJournalWorkers(loadedRun.run, loadedRun.directory, workflow)
       });
     }
     await exporter.updateIndex(
@@ -114,46 +108,7 @@ async function loadWorkspaceConfig(cwd: string): Promise<ObsidianVaultConfig | u
 }
 
 async function loadRuns(cwd: string): Promise<Run[]> {
-  return (await loadRunsWithDirectories(cwd)).map((loadedRun) => loadedRun.run);
-}
-
-async function loadRunsWithDirectories(cwd: string): Promise<LoadedRun[]> {
-  const directory = runsDir(cwd);
-  let entries: Dirent[];
-  try {
-    entries = await readdir(directory, { withFileTypes: true });
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-
-  const runs: LoadedRun[] = [];
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-
-    const runDirectory = path.join(directory, entry.name);
-    const run = await readRunIfPresent(path.join(runDirectory, "run.json"));
-    if (run !== undefined) {
-      runs.push({ run, runDirectory });
-    }
-  }
-
-  return runs;
-}
-
-async function readRunIfPresent(runPath: string): Promise<Run | undefined> {
-  try {
-    return RunSchema.parse(JSON.parse(await readFile(runPath, "utf8")));
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
+  return (await listRuns({ cwd })).runs.map((loadedRun) => loadedRun.run);
 }
 
 function includeRun(runs: readonly Run[], run: Run): Run[] {
