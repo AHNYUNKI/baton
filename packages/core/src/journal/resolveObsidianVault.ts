@@ -5,9 +5,7 @@ export type ObsidianVaultEnvironment = {
 };
 
 export type ObsidianVaultConfig = {
-  obsidian?: {
-    vault?: string | undefined;
-  };
+  obsidian?: { vault?: string | undefined } | undefined;
 };
 
 export type ResolveObsidianVaultOptions = {

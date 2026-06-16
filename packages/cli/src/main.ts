@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createNodeProcessRunner, systemClock, type Clock } from "@baton/core";
 
 import { agentCommand } from "./commands/agent.js";
+import { configCommand } from "./commands/config.js";
 import type { CommandContext, WriteLine } from "./commands/context.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { initCommand } from "./commands/init.js";
@@ -48,6 +49,8 @@ export async function runCli(argv: readonly string[], options: CliOptions = {}):
         return await projectCommand(args, context);
       case "agent":
         return await agentCommand(args, context);
+      case "config":
+        return await configCommand(args, context);
       case "workflow":
         return await workflowCommand(args, context);
       case "run":
@@ -77,14 +80,17 @@ export function usage(): string {
     "  baton init",
     "  baton project add <path>",
     "  baton project list",
+    "  baton config list",
+    "  baton config get <dotted.key>",
+    "  baton config set <dotted.key> <value>",
     "  baton agent list",
     "  baton workflow list",
-    "  baton run <request> [--dry-run] [--codex] [--claude] [--test] [--test-command <command>] [--fix] [--max-fix-attempts <n>]",
+    "  baton run <request> [--dry-run] [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--test-command <command>] [--fix|--no-fix] [--max-fix-attempts <n>]",
     "  baton run list [--status <status>] [--limit <n>] [--json]",
     "  baton run show <runId>",
     "  baton run status <runId>",
-    "  baton run resume <runId> [--codex] [--claude] [--test] [--test-command <command>] [--fix] [--max-fix-attempts <n>]",
-    "  baton run approve <runId> [--codex] [--claude] [--test] [--test-command <command>] [--fix] [--max-fix-attempts <n>] [--reject]",
+    "  baton run resume <runId> [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--test-command <command>] [--fix|--no-fix] [--max-fix-attempts <n>]",
+    "  baton run approve <runId> [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--test-command <command>] [--fix|--no-fix] [--max-fix-attempts <n>] [--reject]",
     "  baton run clean <runId>",
     "  baton journal sync",
     "  baton codex doctor",

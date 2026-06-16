@@ -1,4 +1,5 @@
 export * from "./config/paths.js";
+export * from "./config/loadConfig.js";
 export * from "./artifacts/ArtifactStore.js";
 export * from "./db/DbClient.js";
 export * from "./db/ddl.js";

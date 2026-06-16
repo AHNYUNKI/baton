@@ -1,0 +1,53 @@
+{
+  "version": "1",
+  "runId": "config-defaults-v0.10",
+  "buildsOn": "fix-loop-v0.9",
+  "baseBranch": "origin/main",
+  "tasks": [
+    {
+      "id": "task-901",
+      "title": "BatonConfig schema + loadConfig",
+      "description": "packages/schemas/src/batonConfig.schema.ts: BatonConfig Zod = { version: z.literal(1), obsidian?: {vault?: string}, test?: {command?: string[]}, workers?: {codex?, claude?, test?, fix?: boolean, maxFixAttempts?: number(int 1..5)} }. version 외 전부 optional. index re-export. packages/core/src/config/loadConfig.ts: loadConfig(cwd) → <cwd>/.baton/config.json JSON.parse 후 BatonConfigSchema.parse. 파일 부재 → { version: 1 }(빈 기본). 손상/Zod 위반 → throw(경로 포함). core index export. 스키마 유효/무효/하위호환({version:1}) + loadConfig 부재/유효/손상 테스트.",
+      "targetFiles": ["packages/schemas/src/batonConfig.schema.ts", "packages/schemas/src/index.ts", "packages/core/src/config/loadConfig.ts", "packages/core/src/index.ts", "packages/schemas/test/batonConfig.test.ts", "packages/core/test/loadConfig.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02", "AC-03"],
+      "testCommands": ["corepack pnpm --filter @baton/schemas test", "corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-902",
+      "title": "Refactor journal/run config consumption to loadConfig",
+      "description": "packages/cli/src/commands/journal.ts: 자체 loadWorkspaceConfig 파싱 제거, core loadConfig 사용. vault 해석은 resolveObsidianVault({env, config})로 env>config 우선순위 유지. packages/cli/src/commands/run.ts: resolveTestCommand가 loadConfig의 test.command 사용. 기존 v0.5(Obsidian)/v0.7(test) 동작·테스트 회귀 없음 확인.",
+      "targetFiles": ["packages/cli/src/commands/journal.ts", "packages/cli/src/commands/run.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-901"],
+      "acceptanceCriteria": ["AC-04", "AC-05"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-903",
+      "title": "resolveRunOptions (flag > config > default)",
+      "description": "packages/cli/src/commands/run.ts: resolveRunOptions({flags, config}) — codex/claude/test/fix는 3-상태(flags 미지정 → config.workers.x → false). 부정 플래그 --no-codex/--no-claude/--no-test/--no-fix 파싱. --codex와 --no-codex 동시 → 명확한 에러+비정상 종료. maxFixAttempts = flags ?? config ?? 1. testCommand = --test-command ?? config.test.command. createWorkerRegistry/executor에 해석값 전달. config 없음/빈 → 내장 기본(off/Stub) 회귀. 우선순위/부정/충돌/회귀 테스트.",
+      "targetFiles": ["packages/cli/src/commands/run.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-901"],
+      "acceptanceCriteria": ["AC-06", "AC-07", "AC-08", "AC-09"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-904",
+      "title": "baton config command + init template",
+      "description": "packages/cli/src/commands/config.ts: 'config list'(loadConfig 출력), 'config get <dotted.key>'(경로 값, 없는 키 안내), 'config set <dotted.key> <value>'(값 코어션: true/false/정수/JSON 배열/문자열 → load→setAtPath→BatonConfigSchema.parse→write, 기존 필드 보존, 잘못된 값/키/스키마 위반 거부+에러+비정상 종료). packages/cli/src/commands/init.ts: 풍부한 config 템플릿 기록(구조 드러나게), 기존 config 있으면 덮어쓰지 않음(idempotent). main.ts에 config 라우팅+help. list/get/set 라운드트립·검증·보존, init idempotent 테스트.",
+      "targetFiles": ["packages/cli/src/commands/config.ts", "packages/cli/src/commands/init.ts", "packages/cli/src/main.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-901"],
+      "acceptanceCriteria": ["AC-10", "AC-11", "AC-12", "AC-13", "AC-14"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-905",
+      "title": "README + security + gates",
+      "description": "README.md에 config 스키마/baton config 명령/run 기본값 우선순위(플래그>config>기본)/부정 플래그 문서화. main help 갱신. 보안 회귀 테스트: credential/세션 토큰/danger 매치 0, config 읽기/쓰기가 .baton/config.json 한정 단언. 전체 게이트(v0.1~v0.10 회귀 없음) + run --help 스모크, 자체 diff 리뷰, 최종 요약.",
+      "targetFiles": ["README.md", "packages/cli/src/main.ts", "packages/core/test/security.test.ts"],
+      "dependencies": ["task-902", "task-903", "task-904"],
+      "acceptanceCriteria": ["AC-15", "AC-16"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build", "node packages/cli/dist/main.js run --help"]
+    }
+  ]
+}

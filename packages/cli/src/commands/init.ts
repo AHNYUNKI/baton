@@ -5,6 +5,23 @@ import { workspaceDir } from "@baton/core";
 
 import type { CommandContext, CommandResult } from "./context.js";
 
+const defaultConfigTemplate = {
+  version: 1,
+  obsidian: {
+    vault: ""
+  },
+  test: {
+    command: ["corepack", "pnpm", "test"]
+  },
+  workers: {
+    codex: false,
+    claude: false,
+    test: false,
+    fix: false,
+    maxFixAttempts: 1
+  }
+};
+
 export async function initCommand(_args: readonly string[], context: CommandContext): Promise<CommandResult> {
   const batonDir = workspaceDir(context.cwd);
   await mkdir(path.join(batonDir, "runs"), { recursive: true });
@@ -17,7 +34,7 @@ export async function initCommand(_args: readonly string[], context: CommandCont
 
 async function writeConfigIfMissing(configPath: string): Promise<void> {
   try {
-    await writeFile(configPath, `${JSON.stringify({ version: 1 }, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+    await writeFile(configPath, `${JSON.stringify(defaultConfigTemplate, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
   } catch (error) {
     if (isNodeError(error) && error.code === "EEXIST") {
       return;

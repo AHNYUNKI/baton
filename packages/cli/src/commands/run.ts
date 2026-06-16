@@ -1,5 +1,5 @@
 import type { Dirent } from "node:fs";
-import { readFile, readdir } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -11,12 +11,12 @@ import {
   RunService,
   RunStore,
   listRuns,
+  loadConfig,
   summarizeRuns,
-  workspaceDir,
   loadWorkflows,
   maxFixAttemptsLimit
 } from "@baton/core";
-import { RunStatusSchema, type Run, type RunStatus, type Workflow } from "@baton/schemas";
+import { RunStatusSchema, type BatonConfig, type Run, type RunStatus, type Workflow } from "@baton/schemas";
 
 import type { CommandContext, CommandResult } from "./context.js";
 import { checkClaude, checkCodex } from "./doctor.js";
@@ -61,6 +61,7 @@ async function executeCommand(args: readonly string[], context: CommandContext):
     return 1;
   }
 
+  const executorSelection = parsed.dryRun ? undefined : resolveRunOptions({ flags: parsed, config: await loadConfig(context.cwd) });
   const workflows = await loadWorkflows({ cwd: context.cwd });
   const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
   const runService = new RunService({ artifactStore, workflows, clock: context.clock });
@@ -82,22 +83,24 @@ async function executeCommand(args: readonly string[], context: CommandContext):
     return 0;
   }
 
-  if (parsed.useCodex) {
+  if (executorSelection === undefined) {
+    throw new Error("Run worker options were not resolved.");
+  }
+
+  if (executorSelection.useCodex) {
     const preflight = await preflightCodex(context);
     if (preflight !== 0) {
       return preflight;
     }
   }
 
-  if (parsed.useClaude) {
+  if (executorSelection.useClaude) {
     const preflight = await preflightClaude(context);
     if (preflight !== 0) {
       return preflight;
     }
   }
 
-  const workerSelection = await resolveWorkerSelection(context, parsed);
-  const executorSelection = withFixSelection(workerSelection, parsed);
   const { executor, workers } = createExecutor(context, artifactStore, runService, workflows, executorSelection);
   warnRegistry(context, executorSelection);
   const result = await executor.start(parsed.request, {
@@ -189,22 +192,23 @@ async function resumeCommand(args: readonly string[], context: CommandContext): 
     return 1;
   }
 
-  if (parsed.useCodex) {
+  const config = await loadConfig(context.cwd);
+  const executorSelection = resolveRunOptions({ flags: parsed, config });
+
+  if (executorSelection.useCodex) {
     const preflight = await preflightCodex(context);
     if (preflight !== 0) {
       return preflight;
     }
   }
 
-  if (parsed.useClaude) {
+  if (executorSelection.useClaude) {
     const preflight = await preflightClaude(context);
     if (preflight !== 0) {
       return preflight;
     }
   }
 
-  const workerSelection = await resolveWorkerSelection(context, parsed);
-  const executorSelection = withFixSelection(workerSelection, parsed);
   const { artifactStore, executor, workflows, workers } = await createExecutorFromContext(context, executorSelection);
   warnRegistry(context, executorSelection);
   const result = await executor.resume(parsed.runId);
@@ -224,15 +228,18 @@ async function approveCommand(args: readonly string[], context: CommandContext):
     return 1;
   }
 
+  const config = await loadConfig(context.cwd);
+  const executorSelection = resolveRunOptions({ flags: parsed, config });
+
   if (!parsed.reject) {
-    if (parsed.useCodex) {
+    if (executorSelection.useCodex) {
       const preflight = await preflightCodex(context);
       if (preflight !== 0) {
         return preflight;
       }
     }
 
-    if (parsed.useClaude) {
+    if (executorSelection.useClaude) {
       const preflight = await preflightClaude(context);
       if (preflight !== 0) {
         return preflight;
@@ -240,8 +247,6 @@ async function approveCommand(args: readonly string[], context: CommandContext):
     }
   }
 
-  const workerSelection = await resolveWorkerSelection(context, parsed);
-  const executorSelection = withFixSelection(workerSelection, parsed);
   const { artifactStore, executor, workflows, workers } = await createExecutorFromContext(context, executorSelection);
   const decided = await executor.decide(parsed.runId, {
     decision: parsed.reject ? "rejected" : "approved",
@@ -314,10 +319,10 @@ async function cleanCommand(args: readonly string[], context: CommandContext): P
 type ParsedExecuteArgs = {
   request: string;
   dryRun: boolean;
-  useCodex: boolean;
-  useClaude: boolean;
-  useTest: boolean;
-  fixEnabled: boolean;
+  useCodex?: boolean;
+  useClaude?: boolean;
+  useTest?: boolean;
+  fixEnabled?: boolean;
   testCommandFlag?: string;
   maxFixAttempts?: number;
   workflowId?: string;
@@ -392,10 +397,10 @@ function parseRunListArgs(args: readonly string[]): ParsedRunListArgs | undefine
 function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefined {
   const requestParts: string[] = [];
   let dryRun = false;
-  let useCodex = false;
-  let useClaude = false;
-  let useTest = false;
-  let fixEnabled = false;
+  let useCodex: boolean | undefined;
+  let useClaude: boolean | undefined;
+  let useTest: boolean | undefined;
+  let fixEnabled: boolean | undefined;
   let testCommandFlag: string | undefined;
   let maxFixAttempts: number | undefined;
   let workflowId: string | undefined;
@@ -410,22 +415,42 @@ function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefine
     }
 
     if (arg === "--codex") {
-      useCodex = true;
+      useCodex = setTriStateFlag(useCodex, true, "--codex", "--no-codex");
+      continue;
+    }
+
+    if (arg === "--no-codex") {
+      useCodex = setTriStateFlag(useCodex, false, "--codex", "--no-codex");
       continue;
     }
 
     if (arg === "--claude") {
-      useClaude = true;
+      useClaude = setTriStateFlag(useClaude, true, "--claude", "--no-claude");
+      continue;
+    }
+
+    if (arg === "--no-claude") {
+      useClaude = setTriStateFlag(useClaude, false, "--claude", "--no-claude");
       continue;
     }
 
     if (arg === "--test") {
-      useTest = true;
+      useTest = setTriStateFlag(useTest, true, "--test", "--no-test");
+      continue;
+    }
+
+    if (arg === "--no-test") {
+      useTest = setTriStateFlag(useTest, false, "--test", "--no-test");
       continue;
     }
 
     if (arg === "--fix") {
-      fixEnabled = true;
+      fixEnabled = setTriStateFlag(fixEnabled, true, "--fix", "--no-fix");
+      continue;
+    }
+
+    if (arg === "--no-fix") {
+      fixEnabled = setTriStateFlag(fixEnabled, false, "--fix", "--no-fix");
       continue;
     }
 
@@ -471,17 +496,17 @@ function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefine
   }
 
   const request = requestParts.join(" ").trim();
-  if (request.length === 0 || workflowId === "" || projectId === "" || (testCommandFlag !== undefined && !useTest)) {
+  if (request.length === 0 || workflowId === "" || projectId === "") {
     return undefined;
   }
 
   return {
     request,
     dryRun,
-    useCodex,
-    useClaude,
-    useTest,
-    fixEnabled,
+    ...(useCodex === undefined ? {} : { useCodex }),
+    ...(useClaude === undefined ? {} : { useClaude }),
+    ...(useTest === undefined ? {} : { useTest }),
+    ...(fixEnabled === undefined ? {} : { fixEnabled }),
     ...(testCommandFlag === undefined ? {} : { testCommandFlag }),
     ...(maxFixAttempts === undefined ? {} : { maxFixAttempts }),
     ...(workflowId === undefined ? {} : { workflowId }),
@@ -492,10 +517,10 @@ function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefine
 type ParsedApproveArgs = {
   runId: string;
   reject: boolean;
-  useCodex: boolean;
-  useClaude: boolean;
-  useTest: boolean;
-  fixEnabled: boolean;
+  useCodex?: boolean;
+  useClaude?: boolean;
+  useTest?: boolean;
+  fixEnabled?: boolean;
   testCommandFlag?: string;
   maxFixAttempts?: number;
   note?: string;
@@ -503,10 +528,10 @@ type ParsedApproveArgs = {
 
 function parseApproveArgs(args: readonly string[]): ParsedApproveArgs | undefined {
   let reject = false;
-  let useCodex = false;
-  let useClaude = false;
-  let useTest = false;
-  let fixEnabled = false;
+  let useCodex: boolean | undefined;
+  let useClaude: boolean | undefined;
+  let useTest: boolean | undefined;
+  let fixEnabled: boolean | undefined;
   let testCommandFlag: string | undefined;
   let maxFixAttempts: number | undefined;
   let note: string | undefined;
@@ -521,22 +546,42 @@ function parseApproveArgs(args: readonly string[]): ParsedApproveArgs | undefine
     }
 
     if (arg === "--codex") {
-      useCodex = true;
+      useCodex = setTriStateFlag(useCodex, true, "--codex", "--no-codex");
+      continue;
+    }
+
+    if (arg === "--no-codex") {
+      useCodex = setTriStateFlag(useCodex, false, "--codex", "--no-codex");
       continue;
     }
 
     if (arg === "--claude") {
-      useClaude = true;
+      useClaude = setTriStateFlag(useClaude, true, "--claude", "--no-claude");
+      continue;
+    }
+
+    if (arg === "--no-claude") {
+      useClaude = setTriStateFlag(useClaude, false, "--claude", "--no-claude");
       continue;
     }
 
     if (arg === "--test") {
-      useTest = true;
+      useTest = setTriStateFlag(useTest, true, "--test", "--no-test");
+      continue;
+    }
+
+    if (arg === "--no-test") {
+      useTest = setTriStateFlag(useTest, false, "--test", "--no-test");
       continue;
     }
 
     if (arg === "--fix") {
-      fixEnabled = true;
+      fixEnabled = setTriStateFlag(fixEnabled, true, "--fix", "--no-fix");
+      continue;
+    }
+
+    if (arg === "--no-fix") {
+      fixEnabled = setTriStateFlag(fixEnabled, false, "--fix", "--no-fix");
       continue;
     }
 
@@ -575,17 +620,17 @@ function parseApproveArgs(args: readonly string[]): ParsedApproveArgs | undefine
     }
   }
 
-  if (positional.length !== 1 || positional[0] === undefined || note === "" || (testCommandFlag !== undefined && !useTest)) {
+  if (positional.length !== 1 || positional[0] === undefined || note === "") {
     return undefined;
   }
 
   return {
     runId: positional[0],
     reject,
-    useCodex,
-    useClaude,
-    useTest,
-    fixEnabled,
+    ...(useCodex === undefined ? {} : { useCodex }),
+    ...(useClaude === undefined ? {} : { useClaude }),
+    ...(useTest === undefined ? {} : { useTest }),
+    ...(fixEnabled === undefined ? {} : { fixEnabled }),
     ...(testCommandFlag === undefined ? {} : { testCommandFlag }),
     ...(maxFixAttempts === undefined ? {} : { maxFixAttempts }),
     ...(note === undefined ? {} : { note })
@@ -594,19 +639,19 @@ function parseApproveArgs(args: readonly string[]): ParsedApproveArgs | undefine
 
 type ParsedRunIdWithWorkers = {
   runId: string;
-  useCodex: boolean;
-  useClaude: boolean;
-  useTest: boolean;
-  fixEnabled: boolean;
+  useCodex?: boolean;
+  useClaude?: boolean;
+  useTest?: boolean;
+  fixEnabled?: boolean;
   testCommandFlag?: string;
   maxFixAttempts?: number;
 };
 
 function parseRunIdWithWorkers(args: readonly string[]): ParsedRunIdWithWorkers | undefined {
-  let useCodex = false;
-  let useClaude = false;
-  let useTest = false;
-  let fixEnabled = false;
+  let useCodex: boolean | undefined;
+  let useClaude: boolean | undefined;
+  let useTest: boolean | undefined;
+  let fixEnabled: boolean | undefined;
   let testCommandFlag: string | undefined;
   let maxFixAttempts: number | undefined;
   const positional: string[] = [];
@@ -615,22 +660,42 @@ function parseRunIdWithWorkers(args: readonly string[]): ParsedRunIdWithWorkers 
     const arg = args[index];
 
     if (arg === "--codex") {
-      useCodex = true;
+      useCodex = setTriStateFlag(useCodex, true, "--codex", "--no-codex");
+      continue;
+    }
+
+    if (arg === "--no-codex") {
+      useCodex = setTriStateFlag(useCodex, false, "--codex", "--no-codex");
       continue;
     }
 
     if (arg === "--claude") {
-      useClaude = true;
+      useClaude = setTriStateFlag(useClaude, true, "--claude", "--no-claude");
+      continue;
+    }
+
+    if (arg === "--no-claude") {
+      useClaude = setTriStateFlag(useClaude, false, "--claude", "--no-claude");
       continue;
     }
 
     if (arg === "--test") {
-      useTest = true;
+      useTest = setTriStateFlag(useTest, true, "--test", "--no-test");
+      continue;
+    }
+
+    if (arg === "--no-test") {
+      useTest = setTriStateFlag(useTest, false, "--test", "--no-test");
       continue;
     }
 
     if (arg === "--fix") {
-      fixEnabled = true;
+      fixEnabled = setTriStateFlag(fixEnabled, true, "--fix", "--no-fix");
+      continue;
+    }
+
+    if (arg === "--no-fix") {
+      fixEnabled = setTriStateFlag(fixEnabled, false, "--fix", "--no-fix");
       continue;
     }
 
@@ -663,41 +728,45 @@ function parseRunIdWithWorkers(args: readonly string[]): ParsedRunIdWithWorkers 
     }
   }
 
-  if (positional.length !== 1 || positional[0] === undefined || (testCommandFlag !== undefined && !useTest)) {
+  if (positional.length !== 1 || positional[0] === undefined) {
     return undefined;
   }
 
   return {
     runId: positional[0],
-    useCodex,
-    useClaude,
-    useTest,
-    fixEnabled,
+    ...(useCodex === undefined ? {} : { useCodex }),
+    ...(useClaude === undefined ? {} : { useClaude }),
+    ...(useTest === undefined ? {} : { useTest }),
+    ...(fixEnabled === undefined ? {} : { fixEnabled }),
     ...(maxFixAttempts === undefined ? {} : { maxFixAttempts }),
     ...(testCommandFlag === undefined ? {} : { testCommandFlag })
   };
 }
 
-type WorkerSelection = {
-  useCodex: boolean;
-  useClaude: boolean;
-  useTest: boolean;
-  testCommand?: WorkerCommand;
-};
-
-type FixSelection = {
-  fixEnabled: boolean;
+export type RunOptionFlags = {
+  useCodex?: boolean;
+  useClaude?: boolean;
+  useTest?: boolean;
+  fixEnabled?: boolean;
+  testCommandFlag?: string;
   maxFixAttempts?: number;
 };
 
-type ExecutorSelection = WorkerSelection & FixSelection;
+export type ResolveRunOptionsInput = {
+  flags: RunOptionFlags;
+  config?: BatonConfig;
+};
 
-type WorkerSelectionFlags = {
+export type ResolvedRunOptions = {
   useCodex: boolean;
   useClaude: boolean;
   useTest: boolean;
-  testCommandFlag?: string;
+  fixEnabled: boolean;
+  maxFixAttempts: number;
+  testCommand?: WorkerCommand;
 };
+
+type ExecutorSelection = ResolvedRunOptions;
 
 export type ResolveTestCommandOptions = {
   config?: unknown;
@@ -712,45 +781,31 @@ export function resolveTestCommand(options: ResolveTestCommandOptions): WorkerCo
   return parseConfigTestCommand(options.config);
 }
 
-async function resolveWorkerSelection(context: CommandContext, flags: WorkerSelectionFlags): Promise<WorkerSelection> {
-  const config = flags.useTest ? await loadRunConfig(context.cwd) : undefined;
-  const testCommand = flags.useTest
+export function resolveRunOptions({ flags, config = { version: 1 } }: ResolveRunOptionsInput): ResolvedRunOptions {
+  const useCodex = flags.useCodex ?? config.workers?.codex ?? false;
+  const useClaude = flags.useClaude ?? config.workers?.claude ?? false;
+  const useTest = flags.useTest ?? config.workers?.test ?? false;
+  const fixEnabled = flags.fixEnabled ?? config.workers?.fix ?? false;
+  const maxFixAttempts = flags.maxFixAttempts ?? config.workers?.maxFixAttempts ?? 1;
+  const testCommand = useTest
     ? resolveTestCommand({
-        ...(config === undefined ? {} : { config }),
+        config,
         ...(flags.testCommandFlag === undefined ? {} : { flag: flags.testCommandFlag })
       })
     : undefined;
 
+  if (flags.testCommandFlag !== undefined && !useTest) {
+    throw new Error("Cannot use --test-command when the test worker is disabled.");
+  }
+
   return {
-    useCodex: flags.useCodex,
-    useClaude: flags.useClaude,
-    useTest: flags.useTest,
+    useCodex,
+    useClaude,
+    useTest,
+    fixEnabled,
+    maxFixAttempts,
     ...(testCommand === undefined ? {} : { testCommand })
   };
-}
-
-function withFixSelection(workerSelection: WorkerSelection, fixSelection: FixSelection): ExecutorSelection {
-  return {
-    ...workerSelection,
-    fixEnabled: fixSelection.fixEnabled,
-    ...(fixSelection.maxFixAttempts === undefined ? {} : { maxFixAttempts: fixSelection.maxFixAttempts })
-  };
-}
-
-async function loadRunConfig(cwd: string): Promise<unknown | undefined> {
-  const configPath = path.join(workspaceDir(cwd), "config.json");
-
-  try {
-    return JSON.parse(await readFile(configPath, "utf8")) as unknown;
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") {
-      return undefined;
-    }
-    if (error instanceof SyntaxError) {
-      throw new Error(`Invalid Baton config: ${configPath}`);
-    }
-    throw error;
-  }
 }
 
 function parseFlagTestCommand(flag: string): WorkerCommand | undefined {
@@ -781,6 +836,14 @@ function parseConfigTestCommand(config: unknown): WorkerCommand | undefined {
   return { command, args: commandParts.slice(1) };
 }
 
+function setTriStateFlag(current: boolean | undefined, next: boolean, positiveFlag: string, negativeFlag: string): boolean {
+  if (current !== undefined && current !== next) {
+    throw new Error(`Cannot combine ${positiveFlag} and ${negativeFlag}.`);
+  }
+
+  return next;
+}
+
 function parseMaxFixAttempts(value: string | undefined): number | undefined {
   if (value === undefined || !/^[1-9]\d*$/u.test(value)) {
     return undefined;
@@ -796,7 +859,7 @@ function parseMaxFixAttempts(value: string | undefined): number | undefined {
 
 async function createExecutorFromContext(
   context: CommandContext,
-  options: ExecutorSelection = { useCodex: false, useClaude: false, useTest: false, fixEnabled: false }
+  options: ExecutorSelection = { useCodex: false, useClaude: false, useTest: false, fixEnabled: false, maxFixAttempts: 1 }
 ): Promise<{ artifactStore: ArtifactStore; executor: RunExecutor; workflows: Workflow[]; workers: JournalWorkers }> {
   const workflows = await loadWorkflows({ cwd: context.cwd });
   const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
@@ -815,7 +878,7 @@ function createExecutor(
   artifactStore: ArtifactStore,
   runService: RunService,
   workflows: Workflow[],
-  options: ExecutorSelection = { useCodex: false, useClaude: false, useTest: false, fixEnabled: false }
+  options: ExecutorSelection = { useCodex: false, useClaude: false, useTest: false, fixEnabled: false, maxFixAttempts: 1 }
 ): { executor: RunExecutor; workers: JournalWorkers } {
   const registryResult =
     options.useCodex || options.useClaude || options.useTest
@@ -838,7 +901,7 @@ function createExecutor(
       approvalPolicy: new ApprovalPolicy(),
       clock: context.clock,
       fixEnabled: options.fixEnabled,
-      fixPolicy: new FixPolicy(options.maxFixAttempts === undefined ? {} : { maxAttempts: options.maxFixAttempts })
+      fixPolicy: new FixPolicy({ maxAttempts: options.maxFixAttempts })
     }),
     workers: workerKindsForRegistry(registryResult)
   };
@@ -1107,12 +1170,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function runUsage(): string {
   return [
     "Usage:",
-    "  baton run <request> [--dry-run] [--codex] [--claude] [--test] [--test-command <command>] [--fix] [--max-fix-attempts <n>] [--workflow <id>] [--project <id>]",
+    "  baton run <request> [--dry-run] [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--test-command <command>] [--fix|--no-fix] [--max-fix-attempts <n>] [--workflow <id>] [--project <id>]",
     "  baton run list [--status <status>] [--limit <n>] [--json]",
     "  baton run show <runId>",
     "  baton run status <runId>",
-    "  baton run resume <runId> [--codex] [--claude] [--test] [--test-command <command>] [--fix] [--max-fix-attempts <n>]",
-    "  baton run approve <runId> [--codex] [--claude] [--test] [--test-command <command>] [--fix] [--max-fix-attempts <n>] [--reject] [--note <text>]",
+    "  baton run resume <runId> [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--test-command <command>] [--fix|--no-fix] [--max-fix-attempts <n>]",
+    "  baton run approve <runId> [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--test-command <command>] [--fix|--no-fix] [--max-fix-attempts <n>] [--reject] [--note <text>]",
     "  baton run clean <runId>"
   ].join("\n");
 }

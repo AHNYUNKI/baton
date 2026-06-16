@@ -1,10 +1,10 @@
 # Baton
 
-Baton is a local-first AI development orchestrator. The v0.8 MVP extends the CLI
+Baton is a local-first AI development orchestrator. The v0.10 MVP extends the CLI
 from dry-run planning into a safe, resumable run loop with worktree isolation,
 approval gates, per-step logs, artifacts, mockable worker dispatch, read-only run
-history lookup, deterministic finalize artifacts, and opt-in Codex/Claude/Test
-Runner execution for role-specific workers.
+history lookup, deterministic finalize artifacts, project-local config defaults,
+and opt-in Codex/Claude/Test Runner execution for role-specific workers.
 
 ## Packages
 
@@ -19,10 +19,16 @@ Runner execution for role-specific workers.
 baton init
 baton project add <path>
 baton project list
+baton config list
+baton config get workers.codex
+baton config set workers.codex true
+baton config set workers.test true
+baton config set test.command '["pnpm","test"]'
 baton agent list
 baton workflow list
 baton run "<request>"
 baton run "<request>" --codex
+baton run "<request>" --no-codex
 baton run "<request>" --claude
 baton run "<request>" --codex --claude
 baton run "<request>" --test --test-command "pnpm test"
@@ -35,13 +41,72 @@ baton run list --status completed --limit 10
 baton run list --json
 baton run show <runId>
 baton run status <runId>
-baton run resume <runId> [--codex] [--claude] [--test] [--fix]
-baton run approve <runId> [--codex] [--claude] [--test] [--fix] [--reject]
+baton run resume <runId> [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--fix|--no-fix]
+baton run approve <runId> [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--fix|--no-fix] [--reject]
 baton run clean <runId>
 baton journal sync
 baton codex doctor
 baton claude doctor
 ```
+
+## Project Config
+
+Baton reads project-local defaults from `.baton/config.json`. There is no global
+or home config. `baton init` creates a complete template with safe built-in
+defaults: all provider/test/fix workers are off, `maxFixAttempts` is `1`, and
+the example test command is present but inactive until `workers.test` is true.
+
+The config shape is:
+
+```json
+{
+  "version": 1,
+  "obsidian": {
+    "vault": "/path/to/Obsidian Vault"
+  },
+  "test": {
+    "command": ["pnpm", "test"]
+  },
+  "workers": {
+    "codex": true,
+    "claude": true,
+    "test": true,
+    "fix": true,
+    "maxFixAttempts": 3
+  }
+}
+```
+
+Manage it through the CLI:
+
+```bash
+baton config list
+baton config get workers.codex
+baton config set workers.codex true
+baton config set workers.claude true
+baton config set workers.test true
+baton config set workers.fix true
+baton config set workers.maxFixAttempts 3
+baton config set test.command '["pnpm","test"]'
+baton config set obsidian.vault "/path/to/Obsidian Vault"
+```
+
+`baton config set` accepts booleans, integers, JSON arrays, and strings. It
+merges the selected dotted key into the existing file, validates the whole
+config with Zod, and writes only `.baton/config.json`. Unknown keys or invalid
+values are rejected without rewriting the file.
+
+For `baton run`, `run resume`, and `run approve`, worker defaults resolve in
+this order:
+
+```text
+explicit flag > .baton/config.json > built-in default
+```
+
+The built-in worker defaults are all off, which keeps the original StubWorker
+path when no config is present. Negative flags fully override config-on values:
+`--no-codex`, `--no-claude`, `--no-test`, and `--no-fix`. Supplying both forms,
+for example `--codex --no-codex`, is an error.
 
 `run --dry-run` creates `.baton/runs/<runId>/request.md` and `run.json`, then
 prints the planned workflow steps.
@@ -125,6 +190,9 @@ or configured in `.baton/config.json`:
 ```json
 {
   "version": 1,
+  "workers": {
+    "test": true
+  },
   "test": {
     "command": ["pnpm", "test"]
   }
@@ -135,8 +203,8 @@ The flag form is split on whitespace into a command and argument array. The
 config form is already an array and is passed through as command plus args.
 Baton does not invoke a shell for test execution. The Test Runner runs in the
 run worktree, writes `test_result.md`, and maps a non-zero exit or timeout to a
-failed `test` step and failed run. If `--test` is provided without a flag or
-config command, Baton prints a warning and keeps `tester` on `StubWorker`.
+failed `test` step and failed run. If test execution is enabled without a flag
+or config command, Baton prints a warning and keeps `tester` on `StubWorker`.
 
 Approval gates pause execution with status `awaiting-approval`. Continue with:
 
@@ -273,18 +341,18 @@ baton journal sync
 
 ## Safety Model
 
-- Real provider and test execution are opt-in with `--codex`, `--claude`, and
-  `--test`; default provider-backed roles are stubbed.
+- Real provider and test execution are opt-in with explicit flags or
+  project-local config; default provider-backed roles are stubbed.
 - `release_writer` uses the local deterministic `FinalizeWriter` by default and
   does not invoke an external process.
 - `--codex` and `--claude` perform preflight before run/worktree creation.
 - Claude is only registered for `analyst`, `architect`, and `reviewer`.
-- Test Runner is only registered for `tester`, and only when `--test` has a
-  resolved command.
+- Test Runner is only registered for `tester`, and only when test execution has
+  a resolved command.
 - Implementation and fix steps still pass through approval gates.
 - Workers run with `cwd` set to the run worktree path.
-- The `--fix` loop is opt-in and capped by `--max-fix-attempts`; no unbounded
-  retry loop is used.
+- The `--fix` loop is opt-in through a flag or config and capped by
+  `--max-fix-attempts`; no unbounded retry loop is used.
 - Test commands are passed as `(command, args[])` with shell execution disabled.
 - The default Codex sandbox is `workspace-write`.
 - The default Claude adapter uses non-mutating print mode and avoids write/edit

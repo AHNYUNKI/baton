@@ -20,7 +20,7 @@ import type { ProcessRunner } from "@baton/core";
 import type { AgentRole, Run } from "@baton/schemas";
 
 import { runCli } from "../src/main.js";
-import { resolveTestCommand } from "../src/commands/run.js";
+import { resolveRunOptions, resolveTestCommand } from "../src/commands/run.js";
 import { createCodexWorkerRegistry, createDefaultWorkerRegistry, createWorkerRegistry } from "../src/registry.js";
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -37,6 +37,7 @@ describe("@baton/cli", () => {
 
     expect(code).toBe(0);
     expect(output.join("\n")).toContain("baton run <request> [--dry-run]");
+    expect(output.join("\n")).toContain("baton config list");
   });
 
   it("prints run help", async () => {
@@ -49,6 +50,7 @@ describe("@baton/cli", () => {
     expect(output.join("\n")).toContain("baton run show <runId>");
     expect(output.join("\n")).toContain("baton run status <runId>");
     expect(output.join("\n")).toContain("--test-command <command>");
+    expect(output.join("\n")).toContain("--no-codex");
     expect(output.join("\n")).toContain("--fix");
     expect(output.join("\n")).toContain("--max-fix-attempts <n>");
   });
@@ -72,13 +74,139 @@ describe("@baton/cli", () => {
     expect(resolveTestCommand({})).toBeUndefined();
   });
 
+  it("resolves run options from flags before config before defaults", () => {
+    expect(resolveRunOptions({ flags: {} })).toEqual({
+      useCodex: false,
+      useClaude: false,
+      useTest: false,
+      fixEnabled: false,
+      maxFixAttempts: 1
+    });
+
+    expect(
+      resolveRunOptions({
+        flags: {},
+        config: {
+          version: 1,
+          workers: { codex: true, claude: true, test: true, fix: true, maxFixAttempts: 3 },
+          test: { command: ["pnpm", "test"] }
+        }
+      })
+    ).toEqual({
+      useCodex: true,
+      useClaude: true,
+      useTest: true,
+      fixEnabled: true,
+      maxFixAttempts: 3,
+      testCommand: { command: "pnpm", args: ["test"] }
+    });
+
+    expect(
+      resolveRunOptions({
+        flags: {
+          useCodex: false,
+          useClaude: true,
+          useTest: true,
+          fixEnabled: false,
+          maxFixAttempts: 2,
+          testCommandFlag: "npm test"
+        },
+        config: {
+          version: 1,
+          workers: { codex: true, claude: false, test: false, fix: true, maxFixAttempts: 5 },
+          test: { command: ["pnpm", "test"] }
+        }
+      })
+    ).toEqual({
+      useCodex: false,
+      useClaude: true,
+      useTest: true,
+      fixEnabled: false,
+      maxFixAttempts: 2,
+      testCommand: { command: "npm", args: ["test"] }
+    });
+  });
+
+  it("rejects --test-command when the resolved test worker is disabled", () => {
+    expect(() => resolveRunOptions({ flags: { testCommandFlag: "pnpm test" } })).toThrow("test worker is disabled");
+    expect(() => resolveRunOptions({ flags: { useTest: false, testCommandFlag: "pnpm test" }, config: { version: 1, workers: { test: true } } })).toThrow(
+      "test worker is disabled"
+    );
+  });
+
   it("initializes a workspace idempotently", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-init-"));
     const output: string[] = [];
 
     expect(await runCli(["init"], { cwd, stdout: (line) => output.push(line) })).toBe(0);
     expect(await runCli(["init"], { cwd, stdout: (line) => output.push(line) })).toBe(0);
-    expect(JSON.parse(await readFile(path.join(cwd, ".baton", "config.json"), "utf8"))).toEqual({ version: 1 });
+    expect(JSON.parse(await readFile(path.join(cwd, ".baton", "config.json"), "utf8"))).toEqual({
+      version: 1,
+      obsidian: { vault: "" },
+      test: { command: ["corepack", "pnpm", "test"] },
+      workers: { codex: false, claude: false, test: false, fix: false, maxFixAttempts: 1 }
+    });
+  });
+
+  it("keeps an existing init config unchanged", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-init-existing-"));
+    const configPath = path.join(cwd, ".baton", "config.json");
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, `${JSON.stringify({ version: 1, workers: { codex: true } }, null, 2)}\n`, "utf8");
+
+    expect(await runCli(["init"], { cwd })).toBe(0);
+
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({ version: 1, workers: { codex: true } });
+  });
+
+  it("lists, gets, and sets project config values", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-config-"));
+    const configPath = path.join(cwd, ".baton", "config.json");
+    const output: string[] = [];
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, `${JSON.stringify({ version: 1, obsidian: { vault: "/tmp/vault" } }, null, 2)}\n`, "utf8");
+
+    expect(await runCli(["config", "set", "workers.codex", "true"], { cwd, stdout: (line) => output.push(line) })).toBe(0);
+    expect(await runCli(["config", "set", "workers.maxFixAttempts", "3"], { cwd, stdout: (line) => output.push(line) })).toBe(0);
+    expect(await runCli(["config", "set", "test.command", "[\"pnpm\",\"test\"]"], { cwd, stdout: (line) => output.push(line) })).toBe(0);
+
+    const stored = JSON.parse(await readFile(configPath, "utf8")) as unknown;
+    expect(stored).toEqual({
+      version: 1,
+      obsidian: { vault: "/tmp/vault" },
+      workers: { codex: true, maxFixAttempts: 3 },
+      test: { command: ["pnpm", "test"] }
+    });
+
+    output.length = 0;
+    expect(await runCli(["config", "get", "workers.codex"], { cwd, stdout: (line) => output.push(line) })).toBe(0);
+    expect(output.join("\n")).toBe("true");
+
+    output.length = 0;
+    expect(await runCli(["config", "list"], { cwd, stdout: (line) => output.push(line) })).toBe(0);
+    expect(JSON.parse(output.join("\n"))).toEqual(stored);
+  });
+
+  it("rejects invalid config set values and unknown keys without writing", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-config-invalid-"));
+    const configPath = path.join(cwd, ".baton", "config.json");
+    const errors: string[] = [];
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, `${JSON.stringify({ version: 1, workers: { maxFixAttempts: 2 } }, null, 2)}\n`, "utf8");
+    const before = await readFile(configPath, "utf8");
+
+    expect(await runCli(["config", "set", "workers.maxFixAttempts", "9"], { cwd, stderr: (line) => errors.push(line) })).toBe(1);
+    expect(await readFile(configPath, "utf8")).toBe(before);
+    expect(errors.join("\n")).toContain("workers.maxFixAttempts");
+
+    errors.length = 0;
+    expect(await runCli(["config", "get", "workers.codex"], { cwd, stderr: (line) => errors.push(line) })).toBe(1);
+    expect(errors.join("\n")).toContain("Baton config key is not set");
+
+    errors.length = 0;
+    expect(await runCli(["config", "set", "workers.unknown", "true"], { cwd, stderr: (line) => errors.push(line) })).toBe(1);
+    expect(await readFile(configPath, "utf8")).toBe(before);
+    expect(errors.join("\n")).toContain("Unknown Baton config key");
   });
 
   it("adds and lists projects using BATON_HOME", async () => {
@@ -242,6 +370,62 @@ describe("@baton/cli", () => {
       args: ["pnpm", "test"],
       options: { cwd: path.join(cwd, ".baton", "worktrees", runId) }
     });
+  });
+
+  it("uses config worker defaults when run flags are omitted", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-run-config-"));
+    await writeWorkflow(cwd, ["test"]);
+    await mkdir(path.join(cwd, ".baton"), { recursive: true });
+    await writeFile(
+      path.join(cwd, ".baton", "config.json"),
+      `${JSON.stringify({ version: 1, workers: { test: true }, test: { command: ["pnpm", "test"] } }, null, 2)}\n`,
+      "utf8"
+    );
+    const mock = createMockProcessRunner([
+      { stdout: "", stderr: "", exitCode: 0, durationMs: 2 },
+      { stdout: "ok", stderr: "", exitCode: 0, durationMs: 5 }
+    ]);
+
+    expect(await runCli(["run", "Build"], { cwd, runner: mock.runner })).toBe(0);
+
+    const runId = await onlyRunId(cwd);
+    expect(mock.calls.find((call) => call.command === "pnpm")).toEqual({
+      command: "pnpm",
+      args: ["test"],
+      options: { cwd: path.join(cwd, ".baton", "worktrees", runId) }
+    });
+  });
+
+  it("lets negative flags override config worker defaults", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-run-config-off-"));
+    await writeWorkflow(cwd, ["test"]);
+    await mkdir(path.join(cwd, ".baton"), { recursive: true });
+    await writeFile(
+      path.join(cwd, ".baton", "config.json"),
+      `${JSON.stringify({ version: 1, workers: { test: true }, test: { command: ["pnpm", "test"] } }, null, 2)}\n`,
+      "utf8"
+    );
+    const errors: string[] = [];
+    const mock = createMockProcessRunner([{ stdout: "", stderr: "", exitCode: 0, durationMs: 2 }]);
+
+    expect(await runCli(["run", "Build", "--no-test"], { cwd, runner: mock.runner, stderr: (line) => errors.push(line) })).toBe(0);
+
+    const runId = await onlyRunId(cwd);
+    const run = JSON.parse(await readFile(path.join(cwd, ".baton", "runs", runId, "run.json"), "utf8")) as Run;
+    expect(mock.calls.some((call) => call.command === "pnpm")).toBe(false);
+    expect(run.steps[0]?.reason).toBe("Completed by stub worker.");
+    expect(errors.join("\n")).toContain("StubWorker");
+  });
+
+  it("rejects conflicting positive and negative worker flags", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-run-conflict-"));
+    const errors: string[] = [];
+    const mock = createMockProcessRunner();
+
+    expect(await runCli(["run", "Build", "--codex", "--no-codex"], { cwd, runner: mock.runner, stderr: (line) => errors.push(line) })).toBe(1);
+
+    expect(errors.join("\n")).toContain("Cannot combine --codex and --no-codex");
+    expect(mock.calls).toHaveLength(0);
   });
 
   it("warns and keeps tester stubbed when --test has no command", async () => {
