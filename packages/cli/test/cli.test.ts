@@ -11,6 +11,7 @@ import {
   CodexExecAdapter,
   RunStore,
   StubWorker,
+  TestRunnerAdapter,
   createMockProcessRunner,
   fixedClock
 } from "@baton/core";
@@ -18,6 +19,7 @@ import type { ProcessRunner } from "@baton/core";
 import type { AgentRole, Run } from "@baton/schemas";
 
 import { runCli } from "../src/main.js";
+import { resolveTestCommand } from "../src/commands/run.js";
 import { createCodexWorkerRegistry, createDefaultWorkerRegistry, createWorkerRegistry } from "../src/registry.js";
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -45,6 +47,26 @@ describe("@baton/cli", () => {
     expect(output.join("\n")).toContain("baton run list");
     expect(output.join("\n")).toContain("baton run show <runId>");
     expect(output.join("\n")).toContain("baton run status <runId>");
+    expect(output.join("\n")).toContain("--test-command <command>");
+  });
+
+  it("resolves test commands from flag before config", () => {
+    expect(resolveTestCommand({ flag: "pnpm --filter @baton/core test" })).toEqual({
+      command: "pnpm",
+      args: ["--filter", "@baton/core", "test"]
+    });
+    expect(
+      resolveTestCommand({
+        flag: "npm test",
+        config: { test: { command: ["pnpm", "test"] } }
+      })
+    ).toEqual({ command: "npm", args: ["test"] });
+    expect(resolveTestCommand({ config: { test: { command: ["corepack", "pnpm", "test"] } } })).toEqual({
+      command: "corepack",
+      args: ["pnpm", "test"]
+    });
+    expect(resolveTestCommand({ config: { test: { command: "pnpm test" } } })).toBeUndefined();
+    expect(resolveTestCommand({})).toBeUndefined();
   });
 
   it("initializes a workspace idempotently", async () => {
@@ -112,6 +134,108 @@ describe("@baton/cli", () => {
     expect(mock.calls[0]?.args).toEqual(["worktree", "add", path.join(cwd, ".baton", "worktrees", runId), "-b", `baton/${runId}`, "main"]);
     const run = JSON.parse(await readFile(path.join(cwd, ".baton", "runs", runs[0] ?? "", "run.json"), "utf8")) as Run;
     expect(run.steps[0]?.reason).toBe("Completed by stub worker.");
+  });
+
+  it("keeps the tester role stubbed when --test is not provided", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-test-stub-"));
+    await writeWorkflow(cwd, ["test"]);
+    const errors: string[] = [];
+    const mock = createMockProcessRunner([{ stdout: "", stderr: "", exitCode: 0, durationMs: 2 }]);
+
+    expect(await runCli(["run", "Build"], { cwd, runner: mock.runner, stderr: (line) => errors.push(line) })).toBe(0);
+
+    expect(mock.calls).toHaveLength(1);
+    expect(mock.calls[0]?.command).toBe("git");
+    expect(mock.calls.some((call) => call.command === "pnpm")).toBe(false);
+    expect(errors.join("\n")).toContain("StubWorker");
+  });
+
+  it("runs the tester step in the worktree when --test and --test-command are provided", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-test-runner-"));
+    await writeWorkflow(cwd, ["test"]);
+    const output: string[] = [];
+    const errors: string[] = [];
+    const mock = createMockProcessRunner([
+      { stdout: "", stderr: "", exitCode: 0, durationMs: 2 },
+      { stdout: "tests passed", stderr: "", exitCode: 0, durationMs: 5 }
+    ]);
+
+    expect(
+      await runCli(["run", "Build", "--test", "--test-command", "pnpm test"], {
+        cwd,
+        runner: mock.runner,
+        stdout: (line) => output.push(line),
+        stderr: (line) => errors.push(line)
+      })
+    ).toBe(0);
+
+    const runId = await onlyRunId(cwd);
+    const worktreePath = path.join(cwd, ".baton", "worktrees", runId);
+    const testCall = mock.calls.find((call) => call.command === "pnpm");
+    expect(testCall).toEqual({
+      command: "pnpm",
+      args: ["test"],
+      options: { cwd: worktreePath }
+    });
+    expect(output.join("\n")).toContain("completed");
+    expect(errors.join("\n")).toContain("TestRunnerAdapter for tester");
+    const testResult = await readFile(path.join(cwd, ".baton", "runs", runId, "test_result.md"), "utf8");
+    expect(testResult).toContain("Summary: PASS");
+    expect(testResult).toContain("tests passed");
+  });
+
+  it("uses config test.command when --test-command is omitted", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-test-config-"));
+    await writeWorkflow(cwd, ["test"]);
+    await mkdir(path.join(cwd, ".baton"), { recursive: true });
+    await writeFile(path.join(cwd, ".baton", "config.json"), `${JSON.stringify({ version: 1, test: { command: ["corepack", "pnpm", "test"] } }, null, 2)}\n`, "utf8");
+    const mock = createMockProcessRunner([
+      { stdout: "", stderr: "", exitCode: 0, durationMs: 2 },
+      { stdout: "ok", stderr: "", exitCode: 0, durationMs: 5 }
+    ]);
+
+    expect(await runCli(["run", "Build", "--test"], { cwd, runner: mock.runner })).toBe(0);
+
+    const runId = await onlyRunId(cwd);
+    expect(mock.calls.find((call) => call.command === "corepack")).toEqual({
+      command: "corepack",
+      args: ["pnpm", "test"],
+      options: { cwd: path.join(cwd, ".baton", "worktrees", runId) }
+    });
+  });
+
+  it("warns and keeps tester stubbed when --test has no command", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-test-missing-"));
+    await writeWorkflow(cwd, ["test"]);
+    const errors: string[] = [];
+    const mock = createMockProcessRunner([{ stdout: "", stderr: "", exitCode: 0, durationMs: 2 }]);
+
+    expect(await runCli(["run", "Build", "--test"], { cwd, runner: mock.runner, stderr: (line) => errors.push(line) })).toBe(0);
+
+    const runId = await onlyRunId(cwd);
+    const run = JSON.parse(await readFile(path.join(cwd, ".baton", "runs", runId, "run.json"), "utf8")) as Run;
+    expect(mock.calls).toHaveLength(1);
+    expect(mock.calls.some((call) => call.command === "pnpm")).toBe(false);
+    expect(errors.join("\n")).toContain("--test requested but no test command was configured");
+    expect(run.steps[0]?.reason).toBe("Completed by stub worker.");
+  });
+
+  it("marks the test step failed and skips remaining steps when the command exits non-zero", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-test-fail-"));
+    await writeWorkflow(cwd, ["test", "review"]);
+    const mock = createMockProcessRunner([
+      { stdout: "", stderr: "", exitCode: 0, durationMs: 2 },
+      { stdout: "failing test", stderr: "assertion failed", exitCode: 1, durationMs: 5 }
+    ]);
+
+    expect(await runCli(["run", "Build", "--test", "--test-command", "pnpm test"], { cwd, runner: mock.runner })).toBe(1);
+
+    const runId = await onlyRunId(cwd);
+    const run = JSON.parse(await readFile(path.join(cwd, ".baton", "runs", runId, "run.json"), "utf8")) as Run;
+    expect(run.status).toBe("failed");
+    expect(run.steps[0]).toMatchObject({ id: "test", status: "failed" });
+    expect(run.steps[1]).toMatchObject({ id: "review", status: "skipped", reason: "Previous step failed: test" });
+    expect(await readFile(path.join(cwd, ".baton", "runs", runId, "test_result.md"), "utf8")).toContain("Summary: FAIL");
   });
 
   it("automatically exports an actual run journal with the selected worker registry", async () => {
@@ -480,7 +604,9 @@ describe("@baton/cli", () => {
     const defaults = createDefaultWorkerRegistry();
     const codex = createCodexWorkerRegistry();
     const claude = createWorkerRegistry({ claude: true });
-    const combined = createWorkerRegistry({ codex: true, claude: true });
+    const test = createWorkerRegistry({ test: true, testCommand: { command: "pnpm", args: ["test"] } });
+    const testWithoutCommand = createWorkerRegistry({ test: true });
+    const combined = createWorkerRegistry({ codex: true, claude: true, test: true, testCommand: { command: "pnpm", args: ["test"] } });
 
     for (const role of roles) {
       expect(defaults.registry.resolve(role)).toBeInstanceOf(StubWorker);
@@ -496,12 +622,19 @@ describe("@baton/cli", () => {
     expect(claude.registry.resolve("architect")).toBeInstanceOf(ClaudeCodeAdapter);
     expect(claude.registry.resolve("reviewer")).toBeInstanceOf(ClaudeCodeAdapter);
     expect(claude.registry.resolve("implementer")).toBeInstanceOf(StubWorker);
+    expect(test.registry.resolve("tester")).toBeInstanceOf(TestRunnerAdapter);
+    expect(test.registry.resolve("implementer")).toBeInstanceOf(StubWorker);
+    expect(test.testerRoles).toEqual(["tester"]);
+    expect(test.stubRoles).not.toContain("tester");
+    expect(testWithoutCommand.registry.resolve("tester")).toBeInstanceOf(StubWorker);
+    expect(testWithoutCommand.testerRoles).toEqual([]);
     expect(combined.registry.resolve("analyst")).toBeInstanceOf(ClaudeCodeAdapter);
     expect(combined.registry.resolve("architect")).toBeInstanceOf(ClaudeCodeAdapter);
     expect(combined.registry.resolve("reviewer")).toBeInstanceOf(ClaudeCodeAdapter);
     expect(combined.registry.resolve("implementer")).toBeInstanceOf(CodexExecAdapter);
     expect(combined.registry.resolve("fixer")).toBeInstanceOf(CodexExecAdapter);
-    expect(combined.stubRoles).toEqual(["tester", "release_writer"]);
+    expect(combined.registry.resolve("tester")).toBeInstanceOf(TestRunnerAdapter);
+    expect(combined.stubRoles).toEqual(["release_writer"]);
   });
 
   it("does not create a run or worktree when codex preflight fails", async () => {
@@ -768,6 +901,70 @@ describe("@baton/cli", () => {
     expect(await readFile(path.join(cwd, ".baton", "runs", "run-1", "analysis.md"), "utf8")).toBe("# Analysis");
   });
 
+  it("supports resume with test opt-in", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-test-resume-"));
+    await writeWorkflow(cwd, ["test"]);
+    const artifactStore = new ArtifactStore({ workspaceRoot: cwd });
+    const runStore = new RunStore({ artifactStore, clock: fixedClock("2026-06-15T00:00:00.000Z") });
+    const worktreePath = path.join(cwd, ".baton", "worktrees", "run-1");
+    await artifactStore.writeArtifact("run-1", "request.md", "Build Baton\n");
+    await runStore.save({
+      id: "run-1",
+      request: "Build Baton",
+      workflowId: "default",
+      status: "running",
+      dryRun: false,
+      createdAt: "2026-06-15T00:00:00.000Z",
+      worktreePath,
+      baseBranch: "main",
+      steps: [{ id: "test", type: "test", status: "planned" }]
+    });
+    const mock = createMockProcessRunner([{ stdout: "ok", stderr: "", exitCode: 0, durationMs: 3 }]);
+
+    expect(await runCli(["run", "resume", "run-1", "--test", "--test-command", "pnpm test"], { cwd, runner: mock.runner })).toBe(0);
+
+    expect(mock.calls[0]).toEqual({
+      command: "pnpm",
+      args: ["test"],
+      options: { cwd: worktreePath }
+    });
+    expect(await readFile(path.join(cwd, ".baton", "runs", "run-1", "test_result.md"), "utf8")).toContain("Summary: PASS");
+  });
+
+  it("supports approve with test opt-in after a gated implement step", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-test-approve-"));
+    await writeWorkflow(cwd, ["implement", "test"]);
+    const artifactStore = new ArtifactStore({ workspaceRoot: cwd });
+    const runStore = new RunStore({ artifactStore, clock: fixedClock("2026-06-15T00:00:00.000Z") });
+    const worktreePath = path.join(cwd, ".baton", "worktrees", "run-1");
+    await artifactStore.writeArtifact("run-1", "request.md", "Build Baton\n");
+    await runStore.save({
+      id: "run-1",
+      request: "Build Baton",
+      workflowId: "default",
+      status: "awaiting-approval",
+      dryRun: false,
+      createdAt: "2026-06-15T00:00:00.000Z",
+      worktreePath,
+      baseBranch: "main",
+      steps: [
+        { id: "implement", type: "implement", status: "planned" },
+        { id: "test", type: "test", status: "planned" }
+      ]
+    });
+    const mock = createMockProcessRunner([{ stdout: "ok", stderr: "", exitCode: 0, durationMs: 3 }]);
+
+    expect(await runCli(["run", "approve", "run-1", "--test", "--test-command", "pnpm test"], { cwd, runner: mock.runner })).toBe(0);
+
+    const run = JSON.parse(await readFile(path.join(cwd, ".baton", "runs", "run-1", "run.json"), "utf8")) as Run;
+    expect(mock.calls[0]).toEqual({
+      command: "pnpm",
+      args: ["test"],
+      options: { cwd: worktreePath }
+    });
+    expect(run.steps.map((step) => step.status)).toEqual(["completed", "completed"]);
+  });
+
   it("cleans only terminal run worktrees and preserves run state", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-clean-"));
     const artifactStore = new ArtifactStore({ workspaceRoot: cwd });
@@ -921,7 +1118,7 @@ describe("@baton/cli", () => {
   });
 });
 
-type WorkflowStepId = "analyze" | "design" | "implement" | "review";
+type WorkflowStepId = "analyze" | "design" | "implement" | "test" | "review";
 
 async function writeWorkflow(cwd: string, stepIds: WorkflowStepId[]): Promise<void> {
   const workflowsDir = path.join(cwd, "examples", "workflows");
@@ -932,6 +1129,9 @@ async function writeWorkflow(cwd: string, stepIds: WorkflowStepId[]): Promise<vo
     }
     if (id === "design") {
       return ["  - id: design", "    name: Design", "    type: design", "    role: architect"].join("\n");
+    }
+    if (id === "test") {
+      return ["  - id: test", "    name: Test", "    type: test", "    role: tester"].join("\n");
     }
     if (id === "review") {
       return ["  - id: review", "    name: Review", "    type: review", "    role: reviewer"].join("\n");

@@ -1,9 +1,10 @@
 # Baton
 
-Baton is a local-first AI development orchestrator. The v0.6 MVP extends the CLI
+Baton is a local-first AI development orchestrator. The v0.7 MVP extends the CLI
 from dry-run planning into a safe, resumable run loop with worktree isolation,
 approval gates, per-step logs, artifacts, mockable worker dispatch, read-only run
-history lookup, and opt-in Codex/Claude execution for role-specific workers.
+history lookup, and opt-in Codex/Claude/Test Runner execution for role-specific
+workers.
 
 ## Packages
 
@@ -24,14 +25,16 @@ baton run "<request>"
 baton run "<request>" --codex
 baton run "<request>" --claude
 baton run "<request>" --codex --claude
+baton run "<request>" --test --test-command "pnpm test"
+baton run "<request>" --codex --claude --test --test-command "pnpm test"
 baton run "<request>" --dry-run
 baton run list
 baton run list --status completed --limit 10
 baton run list --json
 baton run show <runId>
 baton run status <runId>
-baton run resume <runId> [--codex] [--claude]
-baton run approve <runId> [--codex] [--claude] [--reject]
+baton run resume <runId> [--codex] [--claude] [--test]
+baton run approve <runId> [--codex] [--claude] [--test] [--reject]
 baton run clean <runId>
 baton journal sync
 baton codex doctor
@@ -69,6 +72,31 @@ include write/edit or broad access flags.
 `--codex --claude` can be combined: Claude handles analysis/design/review roles,
 Codex handles implementation/fix roles, and every other role remains stubbed.
 
+`run "<request>" --test` opts into real test execution for the `tester` role
+only. The command can be supplied as a flag:
+
+```bash
+baton run "<request>" --test --test-command "pnpm test"
+```
+
+or configured in `.baton/config.json`:
+
+```json
+{
+  "version": 1,
+  "test": {
+    "command": ["pnpm", "test"]
+  }
+}
+```
+
+The flag form is split on whitespace into a command and argument array. The
+config form is already an array and is passed through as command plus args.
+Baton does not invoke a shell for test execution. The Test Runner runs in the
+run worktree, writes `test_result.md`, and maps a non-zero exit or timeout to a
+failed `test` step and failed run. If `--test` is provided without a flag or
+config command, Baton prints a warning and keeps `tester` on `StubWorker`.
+
 Approval gates pause execution with status `awaiting-approval`. Continue with:
 
 ```bash
@@ -76,9 +104,11 @@ baton run approve <runId>
 baton run approve <runId> --codex
 baton run approve <runId> --claude
 baton run approve <runId> --codex --claude
+baton run approve <runId> --test --test-command "pnpm test"
 baton run resume <runId> --codex
 baton run resume <runId> --claude
 baton run resume <runId> --codex --claude
+baton run resume <runId> --test --test-command "pnpm test"
 ```
 
 Reject a pending gate with:
@@ -196,12 +226,15 @@ baton journal sync
 
 ## Safety Model
 
-- Real provider execution is opt-in with `--codex`, `--claude`, or both; default
-  runs are stubbed.
+- Real provider and test execution are opt-in with `--codex`, `--claude`, and
+  `--test`; default runs are stubbed.
 - `--codex` and `--claude` perform preflight before run/worktree creation.
 - Claude is only registered for `analyst`, `architect`, and `reviewer`.
+- Test Runner is only registered for `tester`, and only when `--test` has a
+  resolved command.
 - Implementation and fix steps still pass through approval gates.
 - Workers run with `cwd` set to the run worktree path.
+- Test commands are passed as `(command, args[])` with shell execution disabled.
 - The default Codex sandbox is `workspace-write`.
 - The default Claude adapter uses non-mutating print mode and avoids write/edit
   or broad access flags.
@@ -216,12 +249,13 @@ corepack pnpm typecheck
 corepack pnpm test
 corepack pnpm build
 node packages/cli/dist/main.js --help
+node packages/cli/dist/main.js run --help
 ```
 
 Runtime dependencies are intentionally limited to `zod` and `yaml`; the rest are
 development tools for TypeScript and tests.
 
-## v0.4 Non-Goals
+## v0.7 Non-Goals
 
 - macOS app, web service, or deployment automation.
 - Real SQLite persistence.
@@ -230,6 +264,8 @@ development tools for TypeScript and tests.
 - ESLint or Prettier configuration.
 - OpenAI Responses or local-model worker adapters.
 - Claude multi-turn sessions, MCP integration, and automatic diff capture.
+- Automatic test framework detection, structured test output parsing, retries,
+  and fix loops.
 
 ## Follow-Up TODOs
 

@@ -1,0 +1,53 @@
+{
+  "version": "1",
+  "runId": "test-runner-v0.7",
+  "buildsOn": "run-history-v0.6",
+  "baseBranch": "origin/main",
+  "tasks": [
+    {
+      "id": "task-601",
+      "title": "TestRunnerAdapter",
+      "description": "packages/core/src/workers/test/TestRunnerAdapter.ts: WorkerAdapter 구현. constructor(options:{command, args?, runner?}). run(input)이 runner.run(command, args, {cwd: input.cwd, timeoutMs?})로 실행(배열 인자, 셸 결합 없음). metadata.stepType==='test'이고 runDirectory/stepId 있으면 test_result.md(명령/exit/요약(pass·fail 라벨)+잘린 stdout/stderr) 작성, artifacts에 경로. exitCode===0→success:true, exit≠0/예외→success:false(try/catch). timeout 전달. auth/세션 토큰 미접근. core index export. 단위 테스트(배열 인자/cwd/test_result.md/exit 매핑/timeout/토큰 부재).",
+      "targetFiles": ["packages/core/src/workers/test/TestRunnerAdapter.ts", "packages/core/src/index.ts", "packages/core/test/testRunnerAdapter.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02", "AC-03", "AC-04", "AC-05"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-602",
+      "title": "resolveTestCommand",
+      "description": "packages/cli/src/commands/run.ts(또는 신규 testCommand.ts): resolveTestCommand({config, flag}) → {command, args} | undefined. --test-command 문자열은 공백 분리(첫 토큰=command, 나머지=args). config의 test.command(string[])는 그대로. flag 우선, 둘 다 없으면 undefined. config는 안전 파싱(.baton/config.json의 optional test.command). 단위 테스트(flag/config/미설정/우선순위).",
+      "targetFiles": ["packages/cli/src/commands/run.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-06", "AC-07"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-603",
+      "title": "Registry test option",
+      "description": "packages/cli/src/registry.ts: WorkerRegistryOptions에 test?:boolean, testCommand?:{command,args}. testerRoles=['tester']. createWorkerRegistry에서 test && testCommand이면 tester=TestRunnerAdapter({command,args,runner}), 아니면 기존 규칙(codex/claude/stub). 반환에 testerRoles 추가(경고용). 기존 createDefaultWorkerRegistry/createCodexWorkerRegistry 회귀. 역할 분리/미설정/조합 테스트.",
+      "targetFiles": ["packages/cli/src/registry.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-601"],
+      "acceptanceCriteria": ["AC-08", "AC-12"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-604",
+      "title": "CLI --test opt-in + combine",
+      "description": "packages/cli/src/commands/run.ts: --test/--test-command 플래그 파싱. resolveTestCommand로 명령 해석. --test && 명령 없음 → 명확한 경고 + tester Stub(run 정상). createWorkerRegistry({codex,claude,test,testCommand,runner}) 주입. --codex/--claude와 조합. resume/approve도 --test 지원. 플래그 없으면 TestRunner 호출 0회(회귀). 테스트 실패(mock exit≠0)→tester failed/run failed/잔여 skipped, test_result.md 존재. 미설정 경고/역할한정/조합/실패 테스트.",
+      "targetFiles": ["packages/cli/src/commands/run.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-602", "task-603"],
+      "acceptanceCriteria": ["AC-09", "AC-10", "AC-11", "AC-13", "AC-14"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-605",
+      "title": "README + security + gates",
+      "description": "packages/cli/src/main.ts help 갱신. README.md에 --test/--test-command/config test.command/안전(opt-in·격리·배열 명령) 문서화. 보안 회귀 테스트: credential/세션 토큰/danger 매치 0, 명령이 배열 전달(셸 결합 없음)·cwd가 base/main 아님 단언. 전체 게이트(v0.1~v0.7 회귀 없음) + run --help 스모크, 자체 diff 리뷰, 최종 요약.",
+      "targetFiles": ["packages/cli/src/main.ts", "README.md", "packages/core/test/security.test.ts"],
+      "dependencies": ["task-604"],
+      "acceptanceCriteria": ["AC-15", "AC-16", "AC-17", "AC-18"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build", "node packages/cli/dist/main.js run --help"]
+    }
+  ]
+}
