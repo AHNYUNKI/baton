@@ -7,14 +7,17 @@ import {
   ArtifactStore,
   FixPolicy,
   GitWorktreeManager,
+  RunIndex,
   RunExecutor,
   RunService,
   RunStore,
+  batonDbPath,
   listRuns,
   loadConfig,
   summarizeRuns,
   loadWorkflows,
-  maxFixAttemptsLimit
+  maxFixAttemptsLimit,
+  openDatabase
 } from "@baton/core";
 import { RunStatusSchema, type BatonConfig, type Run, type RunStatus, type Workflow } from "@baton/schemas";
 
@@ -123,11 +126,20 @@ async function runListCommand(args: readonly string[], context: CommandContext):
     return 1;
   }
 
-  const result = await listRuns({
-    cwd: context.cwd,
-    ...(parsed.status === undefined ? {} : { status: parsed.status }),
-    ...(parsed.limit === undefined ? {} : { limit: parsed.limit })
-  });
+  const db = await openDatabase({ path: batonDbPath(context.cwd) });
+  const index = db === undefined ? undefined : new RunIndex({ db });
+  const result = await (async () => {
+    try {
+      return await listRuns({
+        cwd: context.cwd,
+        ...(parsed.status === undefined ? {} : { status: parsed.status }),
+        ...(parsed.limit === undefined ? {} : { limit: parsed.limit }),
+        ...(index === undefined ? {} : { index })
+      });
+    } finally {
+      await db?.close();
+    }
+  })();
 
   if (parsed.json) {
     context.stdout(JSON.stringify(result.runs.map((loadedRun) => toRunListJson(loadedRun.run)), null, 2));

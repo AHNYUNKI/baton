@@ -1,0 +1,62 @@
+{
+  "version": "1",
+  "runId": "sqlite-index-v0.12",
+  "buildsOn": "e2e-docs-v0.11",
+  "baseBranch": "origin/main",
+  "tasks": [
+    {
+      "id": "task-D01",
+      "title": "NodeSqliteClient + openDatabase guard",
+      "description": "packages/core/src/db/NodeSqliteClient.ts: DbClient(execute/query/close)를 node:sqlite(DatabaseSync)로 구현. 모든 쿼리는 prepare + 파라미터 바인딩(? placeholder, ...params), 문자열 결합 금지. packages/core/src/db/openDatabase.ts: 동적 import('node:sqlite') try/catch 가용성 가드 — 가용 시 NodeSqliteClient 반환, 불가(import 실패/구버전) 시 undefined(사용 불가 신호), throw 없음. 테스트: node:sqlite 가용 시(it.skipIf(!available)) 임시/:memory: 라운드트립·바인딩; openDatabase 가드(모의 불가 → undefined).",
+      "targetFiles": ["packages/core/src/db/NodeSqliteClient.ts", "packages/core/src/db/openDatabase.ts", "packages/core/src/index.ts", "packages/core/test/nodeSqliteClient.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02", "AC-03"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-D02",
+      "title": "runs index DDL + RunIndex",
+      "description": "runs 인덱스 테이블 DDL(id PK, status, dry_run INTEGER, workflow_id, created_at, updated_at, step_count INTEGER, outcome; CREATE TABLE IF NOT EXISTS). packages/core/src/runs/RunIndex.ts(DbClient 주입): ensureSchema(), upsert(run)(INSERT ... ON CONFLICT(id) DO UPDATE, 멱등), list({status?, limit?})(ORDER BY created_at DESC, id ASC + status 필터 + limit; 파일 스캔과 동일 의미), reindex(cwd)(listRuns 파일 스캔 → DELETE FROM runs → upsert 전부). in-memory fake DbClient로 결정적 테스트(upsert 멱등/list 정렬·필터/reindex 재구축/손상 skip).",
+      "targetFiles": ["packages/core/src/db/ddl.ts", "packages/core/src/runs/RunIndex.ts", "packages/core/src/index.ts", "packages/core/test/runIndex.test.ts"],
+      "dependencies": ["task-D01"],
+      "acceptanceCriteria": ["AC-04", "AC-05", "AC-06", "AC-07", "AC-08"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-D03",
+      "title": "RunStore best-effort index upsert",
+      "description": "packages/core/src/runs/RunStore.ts: optional index(RunIndex) 주입. save(run)는 기존 원자적 run.json 기록 후, index가 있으면 try { index.upsert(run) } catch { 경고 } (best-effort, 실패가 save를 깨지 않음). 미주입 시 기존 동작. 테스트: 주입 시 upsert 호출+run.json 정상, upsert throw해도 save 성공, 미주입 시 파일만.",
+      "targetFiles": ["packages/core/src/runs/RunStore.ts", "packages/core/test/runStore.test.ts"],
+      "dependencies": ["task-D02"],
+      "acceptanceCriteria": ["AC-09"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-D04",
+      "title": "listRuns index-first with file fallback (parity)",
+      "description": "packages/core/src/runs/listRuns.ts: optional index 인자. index 가용 시 index.list() 사용, 아니면 기존 파일 스캔. 두 경로 결과가 동일(정렬 createdAt desc+id asc, status, limit, skipped 의미)하도록. 인덱스 없음/비가용 → 파일 폴백(회귀 0). 테스트: 동일 run 집합에 index vs 파일 parity, 폴백.",
+      "targetFiles": ["packages/core/src/runs/listRuns.ts", "packages/core/test/listRuns.test.ts"],
+      "dependencies": ["task-D02"],
+      "acceptanceCriteria": ["AC-10", "AC-11"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-D05",
+      "title": "baton db status|reindex",
+      "description": "packages/cli/src/commands/db.ts: 'db status'(openDatabase 가용성/DB 경로/runs 행 수 출력, 불가 시 명확한 안내), 'db reindex'(RunIndex.reindex(cwd) → 행 수 보고; 드라이버 불가 시 안내+비파괴+비정상 종료). main.ts에 db 라우팅+help. 알 수 없는 서브커맨드 → 사용법+비정상 종료. CLI 테스트(가용/불가 분기).",
+      "targetFiles": ["packages/cli/src/commands/db.ts", "packages/cli/src/main.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-D03", "task-D04"],
+      "acceptanceCriteria": ["AC-12", "AC-13"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-D06",
+      "title": ".gitignore + README/docs + security + gates",
+      "description": ".gitignore에 .baton/baton.db(및 -wal/-shm) 제외 추가. README/docs에 SQLite 인덱스 모델(파일 source-of-truth + 파생 인덱스), baton db status|reindex, 가드/폴백 문서화. 보안 회귀 테스트: credential/세션 토큰/danger 매치 0, SQL 문자열 결합 없음(파라미터 바인딩) 단언, .baton/baton.db gitignore 확인. 전체 게이트(v0.1~v0.12 회귀 없음) + run --help 스모크, 자체 diff 리뷰, 최종 요약.",
+      "targetFiles": [".gitignore", "README.md", "packages/core/test/security.test.ts"],
+      "dependencies": ["task-D05"],
+      "acceptanceCriteria": ["AC-14", "AC-15", "AC-16"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build", "node packages/cli/dist/main.js run --help"]
+    }
+  ]
+}

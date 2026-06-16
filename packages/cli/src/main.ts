@@ -6,6 +6,7 @@ import { createNodeProcessRunner, systemClock, type Clock } from "@baton/core";
 
 import { agentCommand } from "./commands/agent.js";
 import { configCommand } from "./commands/config.js";
+import { dbCommand } from "./commands/db.js";
 import type { CommandContext, WriteLine } from "./commands/context.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { initCommand } from "./commands/init.js";
@@ -57,6 +58,8 @@ export async function runCli(argv: readonly string[], options: CliOptions = {}):
         return await runCommand(args, context);
       case "journal":
         return await journalCommand(args, context);
+      case "db":
+        return await dbCommand(args, context);
       case "codex":
         return await doctorCommand("codex", args, context);
       case "claude":
@@ -93,6 +96,8 @@ export function usage(): string {
     "  baton run approve <runId> [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--test-command <command>] [--fix|--no-fix] [--max-fix-attempts <n>] [--reject]",
     "  baton run clean <runId>",
     "  baton journal sync",
+    "  baton db status",
+    "  baton db reindex",
     "  baton codex doctor",
     "  baton claude doctor"
   ].join("\n");

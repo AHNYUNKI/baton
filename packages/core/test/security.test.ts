@@ -27,11 +27,27 @@ describe("security regressions", () => {
   it("keeps run artifact allow-list patterns trackable", async () => {
     const content = await readFile(path.join(repoRoot, ".gitignore"), "utf8");
 
+    expect(content).toContain(".baton/baton.db");
+    expect(content).toContain(".baton/baton.db-wal");
+    expect(content).toContain(".baton/baton.db-shm");
     expect(content).toContain(".baton/runs/*");
     expect(content).not.toContain(".baton/runs/\n");
     expect(content).toContain("!.baton/runs/codex-exec-v0.3/");
     expect(content).toContain("!.baton/runs/claude-adapter-v0.4/");
     expect(content).toContain("!.baton/runs/obsidian-journal-v0.5/");
+  });
+
+  it("keeps run index SQL parameterized", async () => {
+    const runIndex = await readFile(path.join(packagesRoot, "core", "src", "runs", "RunIndex.ts"), "utf8");
+    const client = await readFile(path.join(packagesRoot, "core", "src", "db", "NodeSqliteClient.ts"), "utf8");
+
+    expect(runIndex).toContain("VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+    expect(runIndex).toContain("WHERE status = ?");
+    expect(runIndex).toContain("LIMIT ?");
+    expect(client).toContain(".run(...[...params])");
+    expect(client).toContain(".all(...[...params])");
+    expect(runIndex).not.toMatch(/WHERE status = [`'"]/u);
+    expect(runIndex).not.toMatch(/LIMIT \$\{/u);
   });
 });
 
