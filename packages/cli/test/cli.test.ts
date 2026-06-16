@@ -42,6 +42,8 @@ describe("@baton/cli", () => {
     const code = await runCli(["run", "--help"], { stdout: (line) => output.push(line) });
 
     expect(code).toBe(0);
+    expect(output.join("\n")).toContain("baton run list");
+    expect(output.join("\n")).toContain("baton run show <runId>");
     expect(output.join("\n")).toContain("baton run status <runId>");
   });
 
@@ -184,6 +186,142 @@ describe("@baton/cli", () => {
     expect(await runCli(["run", "status", "run-1"], { cwd, stdout: (line) => output.push(line) })).toBe(0);
     expect(output.join("\n")).toContain("Run run-1 completed");
     expect(output.join("\n")).toContain("analyze");
+  });
+
+  it("lists runs in createdAt order with a summary", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-list-"));
+    const output: string[] = [];
+    await saveRun(cwd, runFixture({ id: "run-old", status: "completed", createdAt: "2026-06-15T00:00:00.000Z" }));
+    await saveRun(cwd, runFixture({ id: "run-new", status: "failed", createdAt: "2026-06-16T00:00:00.000Z" }));
+
+    expect(await runCli(["run", "list"], { cwd, stdout: (line) => output.push(line) })).toBe(0);
+
+    const text = output.join("\n");
+    expect(text).toContain("Run ID");
+    expect(text).toContain("Workflow");
+    expect(text).toContain("Steps");
+    expect(text.indexOf("run-new")).toBeLessThan(text.indexOf("run-old"));
+    expect(text).toContain("Total: 2");
+    expect(text).toContain("completed: 1");
+    expect(text).toContain("failed: 1");
+  });
+
+  it("supports run list status, limit, and json output", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-list-json-"));
+    const output: string[] = [];
+    await saveRun(cwd, runFixture({ id: "completed-old", status: "completed", createdAt: "2026-06-15T00:00:00.000Z" }));
+    await saveRun(cwd, runFixture({ id: "failed-new", status: "failed", createdAt: "2026-06-17T00:00:00.000Z" }));
+    await saveRun(cwd, runFixture({ id: "completed-new", status: "completed", createdAt: "2026-06-16T00:00:00.000Z" }));
+
+    expect(await runCli(["run", "list", "--status", "completed", "--limit", "1", "--json"], { cwd, stdout: (line) => output.push(line) })).toBe(0);
+
+    const parsed = JSON.parse(output.join("\n")) as unknown;
+    expect(parsed).toEqual([
+      {
+        runId: "completed-new",
+        status: "completed",
+        dryRun: false,
+        workflowId: "default",
+        createdAt: "2026-06-16T00:00:00.000Z",
+        updatedAt: "2026-06-15T12:00:00.000Z",
+        stepCount: 1,
+        outcome: "completed"
+      }
+    ]);
+  });
+
+  it("reports skipped runs and handles empty history", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-list-skip-"));
+    const output: string[] = [];
+    await saveRun(cwd, runFixture({ id: "valid" }));
+    await mkdir(path.join(cwd, ".baton", "runs", "bad-json"), { recursive: true });
+    await mkdir(path.join(cwd, ".baton", "runs", "missing-run-json"), { recursive: true });
+    await writeFile(path.join(cwd, ".baton", "runs", "bad-json", "run.json"), "{", "utf8");
+
+    expect(await runCli(["run", "list"], { cwd, stdout: (line) => output.push(line) })).toBe(0);
+    expect(output.join("\n")).toContain("2 skipped");
+
+    const emptyCwd = await mkdtemp(path.join(tmpdir(), "baton-cli-list-empty-"));
+    output.length = 0;
+    expect(await runCli(["run", "list"], { cwd: emptyCwd, stdout: (line) => output.push(line) })).toBe(0);
+    expect(output.join("\n")).toContain("No runs found.");
+  });
+
+  it("prints detailed run show output", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-show-"));
+    const output: string[] = [];
+    await saveRun(
+      cwd,
+      runFixture({
+        id: "run-1",
+        request: "Build Baton history",
+        status: "completed",
+        worktreePath: path.join(cwd, ".baton", "worktrees", "run-1"),
+        baseBranch: "main",
+        cleanedAt: "2026-06-15T13:00:00.000Z",
+        approvals: [
+          {
+            runId: "run-1",
+            stepId: "implement",
+            status: "approved",
+            createdAt: "2026-06-15T10:00:00.000Z",
+            decidedAt: "2026-06-15T10:05:00.000Z",
+            note: "Looks good"
+          }
+        ],
+        steps: [
+          {
+            id: "implement",
+            type: "implement",
+            status: "completed",
+            startedAt: "2026-06-15T10:00:00.000Z",
+            completedAt: "2026-06-15T10:10:00.000Z",
+            reason: "Completed by stub worker."
+          }
+        ]
+      }),
+      {
+        "request.md": "Build Baton history\n",
+        "logs/codex.stdout.log": "done\n"
+      }
+    );
+
+    expect(await runCli(["run", "show", "run-1"], { cwd, stdout: (line) => output.push(line) })).toBe(0);
+
+    const text = output.join("\n");
+    expect(text).toContain("Request: Build Baton history");
+    expect(text).toContain("Worktree:");
+    expect(text).toContain("Cleaned: 2026-06-15T13:00:00.000Z");
+    expect(text).toContain("implement");
+    expect(text).toContain("Completed by stub worker.");
+    expect(text).toContain("approved");
+    expect(text).toContain("Looks good");
+    expect(text).toContain("logs/codex.stdout.log");
+    expect(text).toContain("run.json");
+  });
+
+  it("returns non-zero when run show cannot find the run", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-show-missing-"));
+    const errors: string[] = [];
+
+    expect(await runCli(["run", "show", "missing"], { cwd, stderr: (line) => errors.push(line) })).toBe(1);
+
+    expect(errors.join("\n")).toContain("Run state not found: missing");
+  });
+
+  it("keeps run list and show read-only", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-readonly-"));
+    await saveRun(cwd, runFixture({ id: "run-1", status: "completed" }));
+    const runPath = path.join(cwd, ".baton", "runs", "run-1", "run.json");
+    const before = await readFile(runPath, "utf8");
+    const mock = createMockProcessRunner();
+    const output: string[] = [];
+
+    expect(await runCli(["run", "list"], { cwd, runner: mock.runner, stdout: (line) => output.push(line) })).toBe(0);
+    expect(await runCli(["run", "show", "run-1"], { cwd, runner: mock.runner, stdout: (line) => output.push(line) })).toBe(0);
+
+    expect(await readFile(runPath, "utf8")).toBe(before);
+    expect(mock.calls).toHaveLength(0);
   });
 
   it("approves a gated run and resumes it", async () => {
@@ -807,6 +945,28 @@ async function onlyRunId(cwd: string): Promise<string> {
   const runs = await readdir(path.join(cwd, ".baton", "runs"));
   expect(runs).toHaveLength(1);
   return runs[0] ?? "";
+}
+
+async function saveRun(cwd: string, run: Run, artifacts: Record<string, string> = {}): Promise<void> {
+  const artifactStore = new ArtifactStore({ workspaceRoot: cwd });
+  const runStore = new RunStore({ artifactStore, clock: fixedClock("2026-06-15T12:00:00.000Z") });
+  await runStore.save(run);
+  for (const [name, content] of Object.entries(artifacts)) {
+    await artifactStore.writeArtifact(run.id, name, content);
+  }
+}
+
+function runFixture(overrides: Partial<Run> = {}): Run {
+  return {
+    id: "run-1",
+    request: "Build Baton",
+    workflowId: "default",
+    status: "running",
+    dryRun: false,
+    createdAt: "2026-06-15T00:00:00.000Z",
+    steps: [{ id: "analyze", type: "analyze", status: "completed" }],
+    ...overrides
+  };
 }
 
 function testEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {

@@ -80,6 +80,8 @@ export function usage(): string {
     "  baton agent list",
     "  baton workflow list",
     "  baton run <request> [--dry-run] [--codex] [--claude]",
+    "  baton run list [--status <status>] [--limit <n>] [--json]",
+    "  baton run show <runId>",
     "  baton run status <runId>",
     "  baton run resume <runId> [--codex] [--claude]",
     "  baton run approve <runId> [--codex] [--claude] [--reject]",
