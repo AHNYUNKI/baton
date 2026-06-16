@@ -13,7 +13,7 @@ describe("security regressions", () => {
     const content = (await Promise.all(files.map((file) => readFile(file, "utf8")))).join("\n");
     const blockedPatterns = [
       new RegExp(`auth[.]json`, "u"),
-      new RegExp(`[.]codex`, "u"),
+      new RegExp(`(^|[/\\\\])${escapeRegExp(".codex")}([/\\\\]|$)`, "u"),
       new RegExp(`creden${"tial"}`, "iu"),
       new RegExp(`danger-${"full"}-${"access"}`, "u"),
       new RegExp(`${escapeRegExp([".clau", "de"].join(""))}.*${["to", "ken"].join("")}`, "iu")

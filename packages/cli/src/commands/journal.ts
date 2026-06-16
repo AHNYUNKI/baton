@@ -4,10 +4,9 @@ import path from "node:path";
 import {
   ObsidianJournalExporter,
   listRuns,
+  loadConfig,
   loadWorkflows,
-  resolveObsidianVault,
-  workspaceDir,
-  type ObsidianVaultConfig
+  resolveObsidianVault
 } from "@baton/core";
 import type { AgentRole, JournalWorkerKind, Run, Workflow, WorkflowStepType } from "@baton/schemas";
 
@@ -27,7 +26,7 @@ export async function journalCommand(args: readonly string[], context: CommandCo
   }
 
   try {
-    const config = await loadWorkspaceConfig(context.cwd);
+    const config = await loadConfig(context.cwd);
     const vaultPath = resolveObsidianVault({ env: context.env, config });
     if (vaultPath === undefined) {
       context.stdout("Obsidian vault is not configured; nothing to sync.");
@@ -67,7 +66,7 @@ export async function maybeExportJournal(
   options: MaybeExportJournalOptions = {}
 ): Promise<void> {
   try {
-    const config = await loadWorkspaceConfig(context.cwd);
+    const config = await loadConfig(context.cwd);
     const vaultPath = resolveObsidianVault({ env: context.env, config });
     if (vaultPath === undefined) {
       return;
@@ -87,23 +86,6 @@ export async function maybeExportJournal(
     await exporter.updateIndex(includeRun(await loadRuns(context.cwd), run), { vaultPath });
   } catch (error) {
     context.stderr(`Warning: failed to export Obsidian journal: ${formatError(error)}`);
-  }
-}
-
-async function loadWorkspaceConfig(cwd: string): Promise<ObsidianVaultConfig | undefined> {
-  const configPath = path.join(workspaceDir(cwd), "config.json");
-
-  try {
-    const parsed: unknown = JSON.parse(await readFile(configPath, "utf8"));
-    if (!isObsidianVaultConfig(parsed)) {
-      throw new Error(`Invalid Baton config: ${configPath}`);
-    }
-    return parsed;
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
   }
 }
 
@@ -183,23 +165,6 @@ function roleForStepType(stepType: WorkflowStepType): AgentRole {
 
 function isJournalWorkerKind(value: unknown): value is JournalWorkerKind {
   return value === "codex" || value === "claude" || value === "stub";
-}
-
-function isObsidianVaultConfig(value: unknown): value is ObsidianVaultConfig {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  const obsidian = value.obsidian;
-  if (obsidian === undefined) {
-    return true;
-  }
-
-  if (!isRecord(obsidian)) {
-    return false;
-  }
-
-  return obsidian.vault === undefined || typeof obsidian.vault === "string";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
