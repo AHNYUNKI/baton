@@ -6,6 +6,32 @@ approval gates, per-step logs, artifacts, mockable worker dispatch, read-only ru
 history lookup, deterministic finalize artifacts, project-local config defaults,
 and opt-in Codex/Claude/Test Runner execution for role-specific workers.
 
+## Documentation
+
+- [Usage runbook](docs/USAGE.md): build, init, config, gated runs, journal sync,
+  and finalize artifacts.
+- [Architecture](docs/ARCHITECTURE.md): workflow pipeline, role-to-worker
+  mapping, artifacts, worktree isolation, and safety model.
+
+## Quick Start
+
+```bash
+corepack pnpm install
+corepack pnpm build
+alias baton="node packages/cli/dist/main.js"
+baton init
+baton run "Add a small scoped change" --test --test-command "corepack pnpm test"
+baton run approve <runId> --note "Design approved"
+baton run approve <runId> --test --test-command "corepack pnpm test" --note "Implementation approved"
+baton run show <runId>
+```
+
+The default workflow pauses at the explicit design approval gate and again
+before implementation. The quick-start path is hermetic for AI providers:
+analysis, design, implementation, and review use `StubWorker`; tests run through
+the configured test command; finalize writes deterministic local artifacts.
+Real `analysis.md`, `design.md`, and `review.md` files require `--claude`.
+
 ## Packages
 
 - `@baton/schemas`: Zod schemas and inferred TypeScript types for persisted data.
