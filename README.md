@@ -1,10 +1,10 @@
 # Baton
 
-Baton is a local-first AI development orchestrator. The v0.7 MVP extends the CLI
+Baton is a local-first AI development orchestrator. The v0.8 MVP extends the CLI
 from dry-run planning into a safe, resumable run loop with worktree isolation,
 approval gates, per-step logs, artifacts, mockable worker dispatch, read-only run
-history lookup, and opt-in Codex/Claude/Test Runner execution for role-specific
-workers.
+history lookup, deterministic finalize artifacts, and opt-in Codex/Claude/Test
+Runner execution for role-specific workers.
 
 ## Packages
 
@@ -46,8 +46,24 @@ prints the planned workflow steps.
 
 `run "<request>"` creates `.baton/worktrees/<runId>`, persists run state in
 `.baton/runs/<runId>/run.json`, and executes workflow steps through the default
-CLI registry. By default the registry uses `StubWorker` for all roles, so the
-run engine can be validated end-to-end without calling an external AI provider.
+CLI registry. By default the registry uses `StubWorker` for analysis,
+implementation, test, review, and fix roles, while `release_writer` is handled
+by the local deterministic `FinalizeWriter`. This lets the run engine be
+validated end-to-end without calling an external AI provider while still
+producing final run artifacts.
+
+The default `finalize` step writes two deterministic files into the run
+directory:
+
+- `final_summary.md`: request, workflow state, step table, test summary when
+  `test_result.md` exists, artifact pointers, and outcome snapshot.
+- `pr_description.md`: a one-line normalized title from the request, summary,
+  step overview, test status, and artifact pointers.
+
+`FinalizeWriter` reads only `run.json` plus existing run artifacts such as
+`analysis.md`, `design.md`, `test_result.md`, and `review.md`. Missing artifacts
+are marked as not present, and rerunning finalize with unchanged inputs rewrites
+the same content.
 
 `run "<request>" --codex` opts into real Codex execution for `implementer` and
 `fixer` only. All other roles still use `StubWorker`. Before any run state or
@@ -70,7 +86,8 @@ The default Claude adapter args are read-only oriented (`--print`) and do not
 include write/edit or broad access flags.
 
 `--codex --claude` can be combined: Claude handles analysis/design/review roles,
-Codex handles implementation/fix roles, and every other role remains stubbed.
+Codex handles implementation/fix roles, `release_writer` remains on
+`FinalizeWriter`, and every other role remains stubbed.
 
 `run "<request>" --test` opts into real test execution for the `tester` role
 only. The command can be supplied as a flag:
@@ -207,6 +224,8 @@ The exporter only writes below the vault's `Baton/` directory:
       analysis.md
       design.md
       review.md
+      final_summary.md
+      pr_description.md
       logs/
       steps/
 ```
@@ -214,8 +233,10 @@ The exporter only writes below the vault's `Baton/` directory:
 Run notes include YAML frontmatter for Dataview, a human-readable summary, step
 status table, selected worker registry (`codex`, `claude`, or `stub`), copied
 artifacts, and embeds for `analysis.md`, `design.md`, and `review.md` when those
-artifacts exist. `Baton/Runs.md` is regenerated as a map-of-content with both a
-Dataview table and a static Markdown fallback table. Existing files outside
+artifacts exist. Finalize artifacts are copied with the rest of the run
+directory, so `final_summary.md` and `pr_description.md` are available beside
+the journal note. `Baton/Runs.md` is regenerated as a map-of-content with both
+a Dataview table and a static Markdown fallback table. Existing files outside
 `Baton/` are not modified or deleted.
 
 To backfill an already-created local run history after configuring a vault:
@@ -227,7 +248,9 @@ baton journal sync
 ## Safety Model
 
 - Real provider and test execution are opt-in with `--codex`, `--claude`, and
-  `--test`; default runs are stubbed.
+  `--test`; default provider-backed roles are stubbed.
+- `release_writer` uses the local deterministic `FinalizeWriter` by default and
+  does not invoke an external process.
 - `--codex` and `--claude` perform preflight before run/worktree creation.
 - Claude is only registered for `analyst`, `architect`, and `reviewer`.
 - Test Runner is only registered for `tester`, and only when `--test` has a
@@ -255,9 +278,11 @@ node packages/cli/dist/main.js run --help
 Runtime dependencies are intentionally limited to `zod` and `yaml`; the rest are
 development tools for TypeScript and tests.
 
-## v0.7 Non-Goals
+## v0.8 Non-Goals
 
 - macOS app, web service, or deployment automation.
+- LLM-written final prose, git diff capture, real PR creation, failure-run
+  finalize, fix loops, or SQLite-backed run state.
 - Real SQLite persistence.
 - Automatic worktree cleanup.
 - Push, deploy, or package-installing command paths.

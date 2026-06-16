@@ -1,0 +1,44 @@
+{
+  "version": "1",
+  "runId": "finalize-writer-v0.8",
+  "buildsOn": "test-runner-v0.7",
+  "baseBranch": "origin/main",
+  "tasks": [
+    {
+      "id": "task-701",
+      "title": "FinalizeWriter + render",
+      "description": "packages/core/src/workers/finalize/FinalizeWriter.ts (WorkerAdapter) + render.ts. run(input): metadata.runDirectory에서 run.json 읽기(없음/손상 → success:false + 메시지, throw 없음). 존재 아티팩트 탐지(analysis.md/design.md/test_result.md/review.md). render.ts로 final_summary.md(요청/워크플로우/step 상태 표/테스트 요약(test_result.md 있으면)/아티팩트 목록/outcome)와 pr_description.md(제목=요청 1줄 정규화/요약/step 개요/테스트 상태/포인터)를 결정적(Clock·random 없음)으로 생성. run 디렉터리 하위로 경로 강제(resolve+검증), 삭제 없음, 멱등 덮어쓰기. artifacts에 두 경로 포함, metadata.provider='finalize'. IO 오류 try/catch → success:false. core index export. 단위 테스트: 섹션/누락 아티팩트 우아 처리/멱등/경로 강제/run.json 부재 상태화/제목 정규화/토큰 부재.",
+      "targetFiles": ["packages/core/src/workers/finalize/FinalizeWriter.ts", "packages/core/src/workers/finalize/render.ts", "packages/core/src/index.ts", "packages/core/test/finalizeWriter.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02", "AC-03", "AC-04", "AC-05", "AC-06", "AC-07", "AC-08"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-702",
+      "title": "Registry: release_writer -> FinalizeWriter (default on)",
+      "description": "packages/cli/src/registry.ts: release_writer를 모든 createWorkerRegistry 변형(default/codex/claude/test/조합)에서 FinalizeWriter로 등록. stubRoles에서 release_writer 제외(또는 등록 단계에서 우선 처리). 다른 역할(implementer/analyst/architect/reviewer/tester/fixer)의 기존 codex/claude/test/stub 매핑 불변. 반환 메타에 finalize 역할 표기(선택). release_writer를 Stub로 단언하던 테스트가 있으면 FinalizeWriter로 갱신. 역할 매핑 테스트.",
+      "targetFiles": ["packages/cli/src/registry.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-701"],
+      "acceptanceCriteria": ["AC-09", "AC-10", "AC-15"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-703",
+      "title": "CLI integration: finalize artifacts on success",
+      "description": "packages/cli/test/cli.test.ts(+필요 시 run.ts): baton run이 mock 워커로 성공 완주 시 run 디렉터리에 final_summary.md/pr_description.md 생성 단언, FinalizeWriter 호출 cwd === worktreePath. (해당 시) Obsidian 저널 export가 final_summary.md를 볼트로 자기완결 복사하는 v0.5 동작 회귀 확인.",
+      "targetFiles": ["packages/cli/test/cli.test.ts", "packages/cli/src/commands/run.ts"],
+      "dependencies": ["task-702"],
+      "acceptanceCriteria": ["AC-11", "AC-12", "AC-14"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-704",
+      "title": "README + security + gates",
+      "description": "packages/cli/src/main.ts help 갱신(필요 시). README.md에 finalize 산출물(final_summary.md/pr_description.md)·기본 on·결정적 생성 문서화. 보안·경로 회귀 테스트: credential/세션 토큰/danger 매치 0, FinalizeWriter가 run 디렉터리 밖으로 쓰지 않음·삭제 없음 단언. 전체 게이트(v0.1~v0.8 회귀 없음) + run --help 스모크, 자체 diff 리뷰, 최종 요약.",
+      "targetFiles": ["packages/cli/src/main.ts", "README.md", "packages/core/test/security.test.ts"],
+      "dependencies": ["task-703"],
+      "acceptanceCriteria": ["AC-13", "AC-16"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build", "node packages/cli/dist/main.js run --help"]
+    }
+  ]
+}

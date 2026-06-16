@@ -1,4 +1,4 @@
-import { ClaudeCodeAdapter, CodexExecAdapter, StubWorker, TestRunnerAdapter, WorkerRegistry, type ProcessRunner } from "@baton/core";
+import { ClaudeCodeAdapter, CodexExecAdapter, FinalizeWriter, StubWorker, TestRunnerAdapter, WorkerRegistry, type ProcessRunner } from "@baton/core";
 import type { AgentRole } from "@baton/schemas";
 
 export type WorkerCommand = {
@@ -26,10 +26,12 @@ export type DefaultWorkerRegistry = WorkerRegistryResult;
 
 export type CodexWorkerRegistry = WorkerRegistryResult;
 
-const stubRoles: AgentRole[] = ["analyst", "architect", "implementer", "tester", "reviewer", "fixer", "release_writer"];
+const stubRoles: AgentRole[] = ["analyst", "architect", "implementer", "tester", "reviewer", "fixer"];
 const codexRoles: AgentRole[] = ["implementer", "fixer"];
 const claudeRoles: AgentRole[] = ["analyst", "architect", "reviewer"];
 const testerRoles: AgentRole[] = ["tester"];
+const finalizeRoles: AgentRole[] = ["release_writer"];
+const registryRoles: AgentRole[] = [...stubRoles, ...finalizeRoles];
 
 export function createDefaultWorkerRegistry(): DefaultWorkerRegistry {
   return createWorkerRegistry();
@@ -45,7 +47,12 @@ export function createWorkerRegistry({ codex = false, claude = false, test = fal
   const actualClaudeRoles = claude ? new Set<AgentRole>(claudeRoles) : new Set<AgentRole>();
   const actualTesterRoles = test && testCommand !== undefined ? new Set<AgentRole>(testerRoles) : new Set<AgentRole>();
 
-  for (const role of stubRoles) {
+  for (const role of registryRoles) {
+    if (finalizeRoles.includes(role)) {
+      registry.register(role, new FinalizeWriter());
+      continue;
+    }
+
     if (actualCodexRoles.has(role)) {
       registry.register(role, new CodexExecAdapter(runner === undefined ? {} : { runner }));
       continue;

@@ -9,6 +9,7 @@ import {
   ArtifactStore,
   ClaudeCodeAdapter,
   CodexExecAdapter,
+  FinalizeWriter,
   RunStore,
   StubWorker,
   TestRunnerAdapter,
@@ -134,6 +135,43 @@ describe("@baton/cli", () => {
     expect(mock.calls[0]?.args).toEqual(["worktree", "add", path.join(cwd, ".baton", "worktrees", runId), "-b", `baton/${runId}`, "main"]);
     const run = JSON.parse(await readFile(path.join(cwd, ".baton", "runs", runs[0] ?? "", "run.json"), "utf8")) as Run;
     expect(run.steps[0]?.reason).toBe("Completed by stub worker.");
+  });
+
+  it("generates finalize artifacts on a successful run and exports them to the journal", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-finalize-"));
+    const vault = await mkdtemp(path.join(tmpdir(), "baton-cli-vault-"));
+    await writeWorkflow(cwd, ["analyze", "finalize"]);
+    const output: string[] = [];
+    const mock = createMockProcessRunner([{ stdout: "", stderr: "", exitCode: 0, durationMs: 2 }]);
+
+    expect(
+      await runCli(["run", "Build", "Baton"], {
+        cwd,
+        env: testEnv({ BATON_OBSIDIAN_VAULT: vault }),
+        runner: mock.runner,
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+
+    const runId = await onlyRunId(cwd);
+    const runDirectory = path.join(cwd, ".baton", "runs", runId);
+    const worktreePath = path.join(cwd, ".baton", "worktrees", runId);
+    const run = JSON.parse(await readFile(path.join(runDirectory, "run.json"), "utf8")) as Run;
+    const finalSummary = await readFile(path.join(runDirectory, "final_summary.md"), "utf8");
+    const prDescription = await readFile(path.join(runDirectory, "pr_description.md"), "utf8");
+
+    expect(output.join("\n")).toContain("completed");
+    expect(run.status).toBe("completed");
+    expect(run.steps.map((step) => step.status)).toEqual(["completed", "completed"]);
+    expect(run.steps[1]?.artifacts).toEqual(
+      expect.arrayContaining([path.join(runDirectory, "final_summary.md"), path.join(runDirectory, "pr_description.md")])
+    );
+    expect(finalSummary).toContain("# Final Summary");
+    expect(finalSummary).toContain("Present source artifacts: (none)");
+    expect(prDescription).toContain("# Build Baton");
+    expect(await readFile(path.join(runDirectory, "logs", "finalize.stdout.log"), "utf8")).toContain(`cwd: ${worktreePath}`);
+    expect(await readFile(path.join(vault, "Baton", "Runs", runId, "final_summary.md"), "utf8")).toBe(finalSummary);
+    expect(await readFile(path.join(vault, "Baton", "Runs", runId, "pr_description.md"), "utf8")).toBe(prDescription);
   });
 
   it("keeps the tester role stubbed when --test is not provided", async () => {
@@ -599,8 +637,8 @@ describe("@baton/cli", () => {
     expect(commandErrors.join("\n")).toContain("returned an error");
   });
 
-  it("keeps the default registry stubbed and limits provider registries to their roles", () => {
-    const roles: AgentRole[] = ["analyst", "architect", "implementer", "tester", "reviewer", "fixer", "release_writer"];
+  it("keeps provider registries scoped and maps release_writer to FinalizeWriter by default", () => {
+    const stubbedRoles: AgentRole[] = ["analyst", "architect", "implementer", "tester", "reviewer", "fixer"];
     const defaults = createDefaultWorkerRegistry();
     const codex = createCodexWorkerRegistry();
     const claude = createWorkerRegistry({ claude: true });
@@ -608,25 +646,30 @@ describe("@baton/cli", () => {
     const testWithoutCommand = createWorkerRegistry({ test: true });
     const combined = createWorkerRegistry({ codex: true, claude: true, test: true, testCommand: { command: "pnpm", args: ["test"] } });
 
-    for (const role of roles) {
+    for (const role of stubbedRoles) {
       expect(defaults.registry.resolve(role)).toBeInstanceOf(StubWorker);
     }
+    expect(defaults.registry.resolve("release_writer")).toBeInstanceOf(FinalizeWriter);
+    expect(defaults.stubRoles).not.toContain("release_writer");
     expect(codex.registry.resolve("implementer")).toBeInstanceOf(CodexExecAdapter);
     expect(codex.registry.resolve("fixer")).toBeInstanceOf(CodexExecAdapter);
     expect(codex.registry.resolve("analyst")).toBeInstanceOf(StubWorker);
     expect(codex.registry.resolve("architect")).toBeInstanceOf(StubWorker);
     expect(codex.registry.resolve("tester")).toBeInstanceOf(StubWorker);
     expect(codex.registry.resolve("reviewer")).toBeInstanceOf(StubWorker);
-    expect(codex.registry.resolve("release_writer")).toBeInstanceOf(StubWorker);
+    expect(codex.registry.resolve("release_writer")).toBeInstanceOf(FinalizeWriter);
     expect(claude.registry.resolve("analyst")).toBeInstanceOf(ClaudeCodeAdapter);
     expect(claude.registry.resolve("architect")).toBeInstanceOf(ClaudeCodeAdapter);
     expect(claude.registry.resolve("reviewer")).toBeInstanceOf(ClaudeCodeAdapter);
     expect(claude.registry.resolve("implementer")).toBeInstanceOf(StubWorker);
+    expect(claude.registry.resolve("release_writer")).toBeInstanceOf(FinalizeWriter);
     expect(test.registry.resolve("tester")).toBeInstanceOf(TestRunnerAdapter);
     expect(test.registry.resolve("implementer")).toBeInstanceOf(StubWorker);
+    expect(test.registry.resolve("release_writer")).toBeInstanceOf(FinalizeWriter);
     expect(test.testerRoles).toEqual(["tester"]);
     expect(test.stubRoles).not.toContain("tester");
     expect(testWithoutCommand.registry.resolve("tester")).toBeInstanceOf(StubWorker);
+    expect(testWithoutCommand.registry.resolve("release_writer")).toBeInstanceOf(FinalizeWriter);
     expect(testWithoutCommand.testerRoles).toEqual([]);
     expect(combined.registry.resolve("analyst")).toBeInstanceOf(ClaudeCodeAdapter);
     expect(combined.registry.resolve("architect")).toBeInstanceOf(ClaudeCodeAdapter);
@@ -634,7 +677,8 @@ describe("@baton/cli", () => {
     expect(combined.registry.resolve("implementer")).toBeInstanceOf(CodexExecAdapter);
     expect(combined.registry.resolve("fixer")).toBeInstanceOf(CodexExecAdapter);
     expect(combined.registry.resolve("tester")).toBeInstanceOf(TestRunnerAdapter);
-    expect(combined.stubRoles).toEqual(["release_writer"]);
+    expect(combined.registry.resolve("release_writer")).toBeInstanceOf(FinalizeWriter);
+    expect(combined.stubRoles).toEqual([]);
   });
 
   it("does not create a run or worktree when codex preflight fails", async () => {
@@ -1118,7 +1162,7 @@ describe("@baton/cli", () => {
   });
 });
 
-type WorkflowStepId = "analyze" | "design" | "implement" | "test" | "review";
+type WorkflowStepId = "analyze" | "design" | "implement" | "test" | "review" | "finalize";
 
 async function writeWorkflow(cwd: string, stepIds: WorkflowStepId[]): Promise<void> {
   const workflowsDir = path.join(cwd, "examples", "workflows");
@@ -1135,6 +1179,9 @@ async function writeWorkflow(cwd: string, stepIds: WorkflowStepId[]): Promise<vo
     }
     if (id === "review") {
       return ["  - id: review", "    name: Review", "    type: review", "    role: reviewer"].join("\n");
+    }
+    if (id === "finalize") {
+      return ["  - id: finalize", "    name: Finalize", "    type: finalize", "    role: release_writer"].join("\n");
     }
     return ["  - id: analyze", "    name: Analyze", "    type: analyze", "    role: analyst"].join("\n");
   });
