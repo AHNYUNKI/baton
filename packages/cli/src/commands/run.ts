@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   ApprovalPolicy,
   ArtifactStore,
+  FixPolicy,
   GitWorktreeManager,
   RunExecutor,
   RunService,
@@ -12,7 +13,8 @@ import {
   listRuns,
   summarizeRuns,
   workspaceDir,
-  loadWorkflows
+  loadWorkflows,
+  maxFixAttemptsLimit
 } from "@baton/core";
 import { RunStatusSchema, type Run, type RunStatus, type Workflow } from "@baton/schemas";
 
@@ -95,8 +97,9 @@ async function executeCommand(args: readonly string[], context: CommandContext):
   }
 
   const workerSelection = await resolveWorkerSelection(context, parsed);
-  const { executor, workers } = createExecutor(context, artifactStore, runService, workflows, workerSelection);
-  warnRegistry(context, workerSelection);
+  const executorSelection = withFixSelection(workerSelection, parsed);
+  const { executor, workers } = createExecutor(context, artifactStore, runService, workflows, executorSelection);
+  warnRegistry(context, executorSelection);
   const result = await executor.start(parsed.request, {
     ...(parsed.workflowId === undefined ? {} : { workflowId: parsed.workflowId }),
     ...(parsed.projectId === undefined ? {} : { projectId: parsed.projectId })
@@ -201,8 +204,9 @@ async function resumeCommand(args: readonly string[], context: CommandContext): 
   }
 
   const workerSelection = await resolveWorkerSelection(context, parsed);
-  const { artifactStore, executor, workflows, workers } = await createExecutorFromContext(context, workerSelection);
-  warnRegistry(context, workerSelection);
+  const executorSelection = withFixSelection(workerSelection, parsed);
+  const { artifactStore, executor, workflows, workers } = await createExecutorFromContext(context, executorSelection);
+  warnRegistry(context, executorSelection);
   const result = await executor.resume(parsed.runId);
 
   printRun(context, result.run);
@@ -237,7 +241,8 @@ async function approveCommand(args: readonly string[], context: CommandContext):
   }
 
   const workerSelection = await resolveWorkerSelection(context, parsed);
-  const { artifactStore, executor, workflows, workers } = await createExecutorFromContext(context, workerSelection);
+  const executorSelection = withFixSelection(workerSelection, parsed);
+  const { artifactStore, executor, workflows, workers } = await createExecutorFromContext(context, executorSelection);
   const decided = await executor.decide(parsed.runId, {
     decision: parsed.reject ? "rejected" : "approved",
     ...(parsed.note === undefined ? {} : { note: parsed.note })
@@ -250,7 +255,7 @@ async function approveCommand(args: readonly string[], context: CommandContext):
     return 0;
   }
 
-  warnRegistry(context, workerSelection);
+  warnRegistry(context, executorSelection);
   const result = await executor.resume(parsed.runId);
   printRun(context, result.run);
   printSteps(context, result.run);
@@ -312,7 +317,9 @@ type ParsedExecuteArgs = {
   useCodex: boolean;
   useClaude: boolean;
   useTest: boolean;
+  fixEnabled: boolean;
   testCommandFlag?: string;
+  maxFixAttempts?: number;
   workflowId?: string;
   projectId?: string;
 };
@@ -388,7 +395,9 @@ function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefine
   let useCodex = false;
   let useClaude = false;
   let useTest = false;
+  let fixEnabled = false;
   let testCommandFlag: string | undefined;
+  let maxFixAttempts: number | undefined;
   let workflowId: string | undefined;
   let projectId: string | undefined;
 
@@ -412,6 +421,21 @@ function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefine
 
     if (arg === "--test") {
       useTest = true;
+      continue;
+    }
+
+    if (arg === "--fix") {
+      fixEnabled = true;
+      continue;
+    }
+
+    if (arg === "--max-fix-attempts") {
+      const parsed = parseMaxFixAttempts(args[index + 1]);
+      if (parsed === undefined) {
+        return undefined;
+      }
+      maxFixAttempts = parsed;
+      index += 1;
       continue;
     }
 
@@ -457,7 +481,9 @@ function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefine
     useCodex,
     useClaude,
     useTest,
+    fixEnabled,
     ...(testCommandFlag === undefined ? {} : { testCommandFlag }),
+    ...(maxFixAttempts === undefined ? {} : { maxFixAttempts }),
     ...(workflowId === undefined ? {} : { workflowId }),
     ...(projectId === undefined ? {} : { projectId })
   };
@@ -469,7 +495,9 @@ type ParsedApproveArgs = {
   useCodex: boolean;
   useClaude: boolean;
   useTest: boolean;
+  fixEnabled: boolean;
   testCommandFlag?: string;
+  maxFixAttempts?: number;
   note?: string;
 };
 
@@ -478,7 +506,9 @@ function parseApproveArgs(args: readonly string[]): ParsedApproveArgs | undefine
   let useCodex = false;
   let useClaude = false;
   let useTest = false;
+  let fixEnabled = false;
   let testCommandFlag: string | undefined;
+  let maxFixAttempts: number | undefined;
   let note: string | undefined;
   const positional: string[] = [];
 
@@ -502,6 +532,21 @@ function parseApproveArgs(args: readonly string[]): ParsedApproveArgs | undefine
 
     if (arg === "--test") {
       useTest = true;
+      continue;
+    }
+
+    if (arg === "--fix") {
+      fixEnabled = true;
+      continue;
+    }
+
+    if (arg === "--max-fix-attempts") {
+      const parsed = parseMaxFixAttempts(args[index + 1]);
+      if (parsed === undefined) {
+        return undefined;
+      }
+      maxFixAttempts = parsed;
+      index += 1;
       continue;
     }
 
@@ -540,7 +585,9 @@ function parseApproveArgs(args: readonly string[]): ParsedApproveArgs | undefine
     useCodex,
     useClaude,
     useTest,
+    fixEnabled,
     ...(testCommandFlag === undefined ? {} : { testCommandFlag }),
+    ...(maxFixAttempts === undefined ? {} : { maxFixAttempts }),
     ...(note === undefined ? {} : { note })
   };
 }
@@ -550,14 +597,18 @@ type ParsedRunIdWithWorkers = {
   useCodex: boolean;
   useClaude: boolean;
   useTest: boolean;
+  fixEnabled: boolean;
   testCommandFlag?: string;
+  maxFixAttempts?: number;
 };
 
 function parseRunIdWithWorkers(args: readonly string[]): ParsedRunIdWithWorkers | undefined {
   let useCodex = false;
   let useClaude = false;
   let useTest = false;
+  let fixEnabled = false;
   let testCommandFlag: string | undefined;
+  let maxFixAttempts: number | undefined;
   const positional: string[] = [];
 
   for (let index = 0; index < args.length; index += 1) {
@@ -575,6 +626,21 @@ function parseRunIdWithWorkers(args: readonly string[]): ParsedRunIdWithWorkers 
 
     if (arg === "--test") {
       useTest = true;
+      continue;
+    }
+
+    if (arg === "--fix") {
+      fixEnabled = true;
+      continue;
+    }
+
+    if (arg === "--max-fix-attempts") {
+      const parsed = parseMaxFixAttempts(args[index + 1]);
+      if (parsed === undefined) {
+        return undefined;
+      }
+      maxFixAttempts = parsed;
+      index += 1;
       continue;
     }
 
@@ -606,6 +672,8 @@ function parseRunIdWithWorkers(args: readonly string[]): ParsedRunIdWithWorkers 
     useCodex,
     useClaude,
     useTest,
+    fixEnabled,
+    ...(maxFixAttempts === undefined ? {} : { maxFixAttempts }),
     ...(testCommandFlag === undefined ? {} : { testCommandFlag })
   };
 }
@@ -616,6 +684,13 @@ type WorkerSelection = {
   useTest: boolean;
   testCommand?: WorkerCommand;
 };
+
+type FixSelection = {
+  fixEnabled: boolean;
+  maxFixAttempts?: number;
+};
+
+type ExecutorSelection = WorkerSelection & FixSelection;
 
 type WorkerSelectionFlags = {
   useCodex: boolean;
@@ -651,6 +726,14 @@ async function resolveWorkerSelection(context: CommandContext, flags: WorkerSele
     useClaude: flags.useClaude,
     useTest: flags.useTest,
     ...(testCommand === undefined ? {} : { testCommand })
+  };
+}
+
+function withFixSelection(workerSelection: WorkerSelection, fixSelection: FixSelection): ExecutorSelection {
+  return {
+    ...workerSelection,
+    fixEnabled: fixSelection.fixEnabled,
+    ...(fixSelection.maxFixAttempts === undefined ? {} : { maxFixAttempts: fixSelection.maxFixAttempts })
   };
 }
 
@@ -698,9 +781,22 @@ function parseConfigTestCommand(config: unknown): WorkerCommand | undefined {
   return { command, args: commandParts.slice(1) };
 }
 
+function parseMaxFixAttempts(value: string | undefined): number | undefined {
+  if (value === undefined || !/^[1-9]\d*$/u.test(value)) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed > maxFixAttemptsLimit) {
+    return undefined;
+  }
+
+  return parsed;
+}
+
 async function createExecutorFromContext(
   context: CommandContext,
-  options: WorkerSelection = { useCodex: false, useClaude: false, useTest: false }
+  options: ExecutorSelection = { useCodex: false, useClaude: false, useTest: false, fixEnabled: false }
 ): Promise<{ artifactStore: ArtifactStore; executor: RunExecutor; workflows: Workflow[]; workers: JournalWorkers }> {
   const workflows = await loadWorkflows({ cwd: context.cwd });
   const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
@@ -719,7 +815,7 @@ function createExecutor(
   artifactStore: ArtifactStore,
   runService: RunService,
   workflows: Workflow[],
-  options: WorkerSelection = { useCodex: false, useClaude: false, useTest: false }
+  options: ExecutorSelection = { useCodex: false, useClaude: false, useTest: false, fixEnabled: false }
 ): { executor: RunExecutor; workers: JournalWorkers } {
   const registryResult =
     options.useCodex || options.useClaude || options.useTest
@@ -740,7 +836,9 @@ function createExecutor(
       workerRegistry: registryResult.registry,
       workflows,
       approvalPolicy: new ApprovalPolicy(),
-      clock: context.clock
+      clock: context.clock,
+      fixEnabled: options.fixEnabled,
+      fixPolicy: new FixPolicy(options.maxFixAttempts === undefined ? {} : { maxAttempts: options.maxFixAttempts })
     }),
     workers: workerKindsForRegistry(registryResult)
   };
@@ -928,9 +1026,13 @@ function warnStub(context: CommandContext): void {
   context.stderr(`Warning: using StubWorker for ${stubRoles.join(", ")}.`);
 }
 
-function warnRegistry(context: CommandContext, selection: WorkerSelection): void {
+function warnRegistry(context: CommandContext, selection: ExecutorSelection): void {
   if (selection.useTest && selection.testCommand === undefined) {
     context.stderr("Warning: --test requested but no test command was configured; using StubWorker for tester.");
+  }
+
+  if (selection.fixEnabled && !selection.useCodex) {
+    context.stderr("Warning: --fix requested without --codex; using StubWorker for fixer, so no provider-specific code changes will be made.");
   }
 
   if (!selection.useCodex && !selection.useClaude && !selection.useTest) {
@@ -1005,12 +1107,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function runUsage(): string {
   return [
     "Usage:",
-    "  baton run <request> [--dry-run] [--codex] [--claude] [--test] [--test-command <command>] [--workflow <id>] [--project <id>]",
+    "  baton run <request> [--dry-run] [--codex] [--claude] [--test] [--test-command <command>] [--fix] [--max-fix-attempts <n>] [--workflow <id>] [--project <id>]",
     "  baton run list [--status <status>] [--limit <n>] [--json]",
     "  baton run show <runId>",
     "  baton run status <runId>",
-    "  baton run resume <runId> [--codex] [--claude] [--test] [--test-command <command>]",
-    "  baton run approve <runId> [--codex] [--claude] [--test] [--test-command <command>] [--reject] [--note <text>]",
+    "  baton run resume <runId> [--codex] [--claude] [--test] [--test-command <command>] [--fix] [--max-fix-attempts <n>]",
+    "  baton run approve <runId> [--codex] [--claude] [--test] [--test-command <command>] [--fix] [--max-fix-attempts <n>] [--reject] [--note <text>]",
     "  baton run clean <runId>"
   ].join("\n");
 }

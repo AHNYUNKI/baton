@@ -8,8 +8,10 @@ import type { WorktreeManager } from "../git/GitWorktreeManager.js";
 import type { Clock } from "../ports/Clock.js";
 import { systemClock } from "../ports/Clock.js";
 import { ApprovalPolicy } from "../policies/ApprovalPolicy.js";
+import { FixPolicy } from "../policies/FixPolicy.js";
 import type { WorkerRunResult } from "../workers/WorkerAdapter.js";
 import { WorkerRegistry } from "../workers/WorkerRegistry.js";
+import { buildFixPrompt } from "./buildFixPrompt.js";
 import type { PlanRunOptions, RunService } from "./RunService.js";
 import { RunStore } from "./RunStore.js";
 import { buildStepPrompt } from "./buildStepPrompt.js";
@@ -33,6 +35,8 @@ export type RunExecutorOptions = {
   clock?: Clock;
   worktreeRoot?: string;
   timeoutMs?: number;
+  fixEnabled?: boolean;
+  fixPolicy?: FixPolicy;
 };
 
 export type StartRunOptions = Omit<PlanRunOptions, "dryRun"> & {
@@ -43,6 +47,20 @@ export type StartRunOptions = Omit<PlanRunOptions, "dryRun"> & {
 export type DecideRunOptions = {
   decision: Extract<ApprovalStatus, "approved" | "rejected">;
   note?: string;
+};
+
+type AttemptFixInput = {
+  run: Run;
+  index: number;
+  workflowStep: WorkflowStep;
+  failedResult: WorkerRunResult;
+  artifactPaths: string[];
+  timeoutMs: number | undefined;
+};
+
+type AttemptFixResult = {
+  run: Run;
+  fixed: boolean;
 };
 
 const terminalStepStatuses = new Set<RunStep["status"]>(["completed", "failed", "skipped"]);
@@ -58,6 +76,8 @@ export class RunExecutor {
   private readonly clock: Clock;
   private readonly worktreeRoot: string | undefined;
   private readonly timeoutMs: number | undefined;
+  private readonly fixEnabled: boolean;
+  private readonly fixPolicy: FixPolicy;
 
   public constructor(options: RunExecutorOptions) {
     this.runService = options.runService;
@@ -70,6 +90,8 @@ export class RunExecutor {
     this.clock = options.clock ?? systemClock;
     this.worktreeRoot = options.worktreeRoot;
     this.timeoutMs = options.timeoutMs;
+    this.fixEnabled = options.fixEnabled ?? false;
+    this.fixPolicy = options.fixPolicy ?? new FixPolicy();
   }
 
   public async start(request: string, options: StartRunOptions = {}): Promise<RunExecutionResult> {
@@ -191,6 +213,32 @@ export class RunExecutor {
         continue;
       }
 
+      if (this.shouldResumeFixAttempt(step, workflowStep)) {
+        const fixAttempt = await this.attemptFix({
+          run,
+          index,
+          workflowStep,
+          failedResult: failedResultFromStep(step),
+          artifactPaths: artifacts,
+          timeoutMs
+        });
+        run = fixAttempt.run;
+        if (fixAttempt.fixed) {
+          continue;
+        }
+
+        const failedStep = run.steps[index] ?? step;
+        run = replaceStep(run, index, {
+          ...failedStep,
+          status: "failed",
+          completedAt: this.now(),
+          reason: failedStep.reason ?? `Fix attempts exhausted for step: ${step.id}`
+        });
+        run = skipFromIndex(run, index + 1, `Previous step failed: ${step.id}`);
+        run = await this.runStore.save({ ...run, status: "failed" });
+        return { run, outcome: "failed", artifactPaths: artifacts };
+      }
+
       const adapter = this.workerRegistry.resolve(workflowStep.role);
       if (adapter === undefined) {
         run = replaceStep(run, index, {
@@ -236,6 +284,21 @@ export class RunExecutor {
       run = await this.runStore.save(run);
 
       if (!result.success) {
+        if (this.fixEnabled) {
+          const fixAttempt = await this.attemptFix({
+            run,
+            index,
+            workflowStep,
+            failedResult: result,
+            artifactPaths: artifacts,
+            timeoutMs
+          });
+          run = fixAttempt.run;
+          if (fixAttempt.fixed) {
+            continue;
+          }
+        }
+
         run = skipFromIndex(run, index + 1, `Previous step failed: ${step.id}`);
         run = await this.runStore.save({ ...run, status: "failed" });
         return { run, outcome: "failed", artifactPaths: artifacts };
@@ -246,7 +309,108 @@ export class RunExecutor {
     return { run, outcome: "completed", artifactPaths: artifacts };
   }
 
-  private async invokeWorker(run: Run, step: WorkflowStep, timeoutMs: number | undefined): Promise<WorkerRunResult> {
+  private async attemptFix(input: AttemptFixInput): Promise<AttemptFixResult> {
+    if (!this.fixPolicy.isFixable(input.workflowStep.type) || this.workerRegistry.resolve("fixer") === undefined) {
+      return { run: input.run, fixed: false };
+    }
+
+    let run = input.run;
+    let failedResult = input.failedResult;
+    let attempts = run.steps[input.index]?.attempts ?? 0;
+    const maxAttempts = this.fixPolicy.maxAttempts;
+
+    while (attempts < maxAttempts) {
+      attempts += 1;
+      const failedStep = run.steps[input.index];
+      if (failedStep === undefined) {
+        return { run, fixed: false };
+      }
+
+      run = replaceStep(run, input.index, runningFixStep(failedStep, attempts, maxAttempts, this.now()));
+      await this.stepEvent(run, "fix.attempt.started", failedStep.id, {
+        attempt: attempts,
+        maxAttempts,
+        role: "fixer"
+      });
+      run = await this.runStore.save(run);
+
+      const fixerStep = buildFixerStep(input.workflowStep, attempts);
+      const fixResult = await this.invokeWorker(
+        run,
+        fixerStep,
+        input.timeoutMs,
+        buildFixPrompt({
+          run,
+          failedStep: input.workflowStep,
+          failedRunStep: failedStep,
+          failedResult,
+          runDirectory: this.artifactStore.getRunDir(run.id),
+          attempt: attempts,
+          maxAttempts
+        })
+      );
+      const fixArtifacts = await this.writeStepArtifacts(run, fixerStep.id, fixResult);
+      input.artifactPaths.push(...fixArtifacts);
+      await this.stepEvent(run, "fix.attempt.finished", failedStep.id, {
+        attempt: attempts,
+        maxAttempts,
+        success: fixResult.success,
+        exitCode: fixResult.exitCode,
+        stub: fixResult.metadata?.stub === true
+      });
+      run = await this.runStore.save(run);
+
+      await this.stepEvent(run, "step.retried", failedStep.id, {
+        attempt: attempts,
+        maxAttempts
+      });
+      const retryResult = await this.invokeWorker(run, input.workflowStep, input.timeoutMs);
+      failedResult = retryResult;
+      const retryArtifacts = await this.writeStepArtifacts(run, retryStepArtifactId(input.workflowStep.id, attempts), retryResult);
+      input.artifactPaths.push(...retryArtifacts);
+
+      const isLastAttempt = attempts >= maxAttempts;
+      const status: RunStep["status"] = retryResult.success ? "completed" : isLastAttempt ? "failed" : "running";
+      const reason = stepReason(retryResult);
+      run = replaceStep(run, input.index, retryStep({
+        previousStep: run.steps[input.index] ?? failedStep,
+        status,
+        attempts,
+        artifacts: retryArtifacts,
+        now: this.now(),
+        reason
+      }));
+      await this.stepEvent(run, retryResult.success ? "step.completed" : "step.failed", failedStep.id, {
+        attempt: attempts,
+        retried: true,
+        exitCode: retryResult.exitCode,
+        stub: retryResult.metadata?.stub === true
+      });
+      run = await this.runStore.save(run);
+
+      if (retryResult.success) {
+        return { run, fixed: true };
+      }
+    }
+
+    return { run, fixed: false };
+  }
+
+  private shouldResumeFixAttempt(step: RunStep, workflowStep: WorkflowStep): boolean {
+    return (
+      this.fixEnabled &&
+      step.status === "running" &&
+      (step.attempts ?? 0) > 0 &&
+      this.fixPolicy.isFixable(workflowStep.type)
+    );
+  }
+
+  private async invokeWorker(
+    run: Run,
+    step: WorkflowStep,
+    timeoutMs: number | undefined,
+    promptOverride?: string
+  ): Promise<WorkerRunResult> {
     const adapter = this.workerRegistry.resolve(step.role);
     if (adapter === undefined) {
       throw new Error(`No worker registered for role: ${step.role}`);
@@ -256,11 +420,13 @@ export class RunExecutor {
     try {
       return await adapter.run({
         cwd: requiredWorktreePath(run),
-        prompt: buildStepPrompt({
-          run,
-          step,
-          runDirectory: this.artifactStore.getRunDir(run.id)
-        }),
+        prompt:
+          promptOverride ??
+          buildStepPrompt({
+            run,
+            step,
+            runDirectory: this.artifactStore.getRunDir(run.id)
+          }),
         metadata: {
           runId: run.id,
           stepId: step.id,
@@ -361,6 +527,70 @@ export class RunExecutor {
   private now(): string {
     return this.clock.now().toISOString();
   }
+}
+
+type RetryStepInput = {
+  previousStep: RunStep;
+  status: RunStep["status"];
+  attempts: number;
+  artifacts: string[];
+  now: string;
+  reason: string | undefined;
+};
+
+function buildFixerStep(failedStep: WorkflowStep, attempt: number): WorkflowStep {
+  return {
+    id: `${failedStep.id}.fix.${attempt}`,
+    name: `Fix ${failedStep.name}`,
+    type: "fix",
+    role: "fixer"
+  };
+}
+
+function retryStepArtifactId(stepId: string, attempt: number): string {
+  return `${stepId}.retry.${attempt}`;
+}
+
+function runningFixStep(step: RunStep, attempts: number, maxAttempts: number, now: string): RunStep {
+  return {
+    id: step.id,
+    type: step.type,
+    status: "running",
+    startedAt: step.startedAt ?? now,
+    reason: `Fix attempt ${attempts} of ${maxAttempts} in progress.`,
+    ...(step.artifacts === undefined ? {} : { artifacts: step.artifacts }),
+    attempts
+  };
+}
+
+function retryStep(input: RetryStepInput): RunStep {
+  const base = {
+    id: input.previousStep.id,
+    type: input.previousStep.type,
+    status: input.status,
+    startedAt: input.previousStep.startedAt ?? input.now,
+    artifacts: input.artifacts,
+    attempts: input.attempts,
+    ...(input.reason === undefined ? {} : { reason: input.reason })
+  };
+
+  return input.status === "running"
+    ? base
+    : {
+        ...base,
+        completedAt: input.now
+      };
+}
+
+function failedResultFromStep(step: RunStep): WorkerRunResult {
+  return {
+    success: false,
+    exitCode: null,
+    stdout: "",
+    stderr: step.reason ?? `Previous fix attempt did not complete successfully: ${step.id}`,
+    durationMs: 0,
+    artifacts: step.artifacts ?? []
+  };
 }
 
 function approvalFor(run: Run, stepId: string): Approval | undefined {
