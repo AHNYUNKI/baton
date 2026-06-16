@@ -1,0 +1,44 @@
+{
+  "version": "1",
+  "runId": "e2e-docs-v0.11",
+  "buildsOn": "config-defaults-v0.10",
+  "baseBranch": "origin/main",
+  "tasks": [
+    {
+      "id": "task-A01",
+      "title": "Canonical hermetic E2E test",
+      "description": "packages/cli/test/e2e.test.ts: 기본 워크플로우를 공개 runCli로 완주. 임시 cwd/$BATON_HOME + fixed clock + mock ProcessRunner(test 명령 exit 0). 흐름: run \"<req>\" --test --test-command \"<cmd>\" → approve 게이트 awaiting-approval 단언 → run approve <id> → resume → implement 게이트(기본 정책) awaiting-approval 단언 → run approve <id> → resume → test(mock exit0) → review → finalize → run.status completed 단언. 산출물 단언: <runDir>/request.md, run.json(completed), test_result.md, final_summary.md, pr_description.md. run list/run show 반영 단언. env.BATON_OBSIDIAN_VAULT=임시 볼트 → <vault>/Baton/Runs/<id>.md + Runs.md + 복사된 final_summary.md 단언. hermetic(실제 외부 호출 0). (선택) fix 변형: test 1회 실패 후 성공 mock + --fix --codex → bounded 재시도 후 completed + attempts 단언.",
+      "targetFiles": ["packages/cli/test/e2e.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02", "AC-03", "AC-04", "AC-05", "AC-06", "AC-12"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-A02",
+      "title": "docs/USAGE.md runbook",
+      "description": "docs/USAGE.md: 설치(corepack pnpm install/build), baton init, baton config set(workers.codex/claude/test, test.command, obsidian.vault, workers.fix/maxFixAttempts), baton run \"<request>\"(게이트→run approve→resume 흐름 설명), run status/list/show, journal sync, finalize 산출물(final_summary.md/pr_description.md) 위치까지 실제 명령 시퀀스 런북. hermetic 한계 정직히: analysis.md/design.md/review.md는 실제 --claude(claude CLI)에서 생성됨을 명시. 명령/플래그는 실제 CLI 표면과 일치.",
+      "targetFiles": ["docs/USAGE.md", "README.md"],
+      "dependencies": ["task-A01"],
+      "acceptanceCriteria": ["AC-07", "AC-10", "AC-11"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-A03",
+      "title": "docs/ARCHITECTURE.md",
+      "description": "docs/ARCHITECTURE.md: 역할→워커 매핑(analyst/architect/reviewer→Claude, implementer/fixer→Codex, tester→TestRunner, release_writer→FinalizeWriter, 나머지/미설정→Stub), 아티팩트 맵(.baton/runs/<id>/의 request/analysis/design/test_result/review/final_summary/pr_description/run.json/logs/steps/events), 안전 모델(worktree 격리, 승인 게이트, bounded fix(1~5), 읽기전용 조회, 볼트 Baton/ 하위 한정, credential/세션 토큰 무접근, danger 금지), 파이프라인 텍스트 다이어그램. 코드와 대조해 정확히(과장 금지).",
+      "targetFiles": ["docs/ARCHITECTURE.md"],
+      "dependencies": ["task-A01"],
+      "acceptanceCriteria": ["AC-08", "AC-09", "AC-10"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-A04",
+      "title": "(optional) docs drift test + gates",
+      "description": "(선택) packages/cli/test/docs.test.ts: docs의 핵심 명령/플래그(baton run, --codex/--claude/--test/--fix, run approve/list/show, config set 등)가 실제 CLI usage 문자열/동작에 존재함을 단언(드리프트 방지). README가 docs/USAGE.md·ARCHITECTURE.md를 링크하는지 확인. 보안 회귀(credential/세션 토큰/danger 0). 전체 게이트(v0.1~v0.11 회귀 없음) + run --help 스모크, 자체 diff 리뷰, 최종 요약.",
+      "targetFiles": ["packages/cli/test/docs.test.ts", "README.md", "packages/core/test/security.test.ts"],
+      "dependencies": ["task-A02", "task-A03"],
+      "acceptanceCriteria": ["AC-09", "AC-13", "AC-14"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build", "node packages/cli/dist/main.js run --help"]
+    }
+  ]
+}
