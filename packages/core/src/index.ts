@@ -21,3 +21,6 @@ export * from "./runs/RunService.js";
 export * from "./runs/RunStore.js";
 export * from "./runs/RunExecutor.js";
 export * from "./runs/buildStepPrompt.js";
+export * from "./journal/resolveObsidianVault.js";
+export * from "./journal/ObsidianJournalExporter.js";
+export * from "./journal/render.js";

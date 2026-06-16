@@ -45,7 +45,10 @@ export class CodexExecAdapter implements WorkerAdapter {
         stdout: result.stdout,
         stderr: result.stderr,
         durationMs: result.durationMs,
-        artifacts
+        artifacts,
+        metadata: {
+          provider: "codex"
+        }
       };
     } catch (error) {
       return {
@@ -54,7 +57,10 @@ export class CodexExecAdapter implements WorkerAdapter {
         stdout: "",
         stderr: error instanceof Error ? error.message : String(error),
         durationMs: Date.now() - startedAt,
-        artifacts
+        artifacts,
+        metadata: {
+          provider: "codex"
+        }
       };
     }
   }

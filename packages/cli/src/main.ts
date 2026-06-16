@@ -2,12 +2,13 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createNodeProcessRunner } from "@baton/core";
+import { createNodeProcessRunner, systemClock, type Clock } from "@baton/core";
 
 import { agentCommand } from "./commands/agent.js";
 import type { CommandContext, WriteLine } from "./commands/context.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { initCommand } from "./commands/init.js";
+import { journalCommand } from "./commands/journal.js";
 import { projectCommand } from "./commands/project.js";
 import { runCommand } from "./commands/run.js";
 import { workflowCommand } from "./commands/workflow.js";
@@ -18,6 +19,7 @@ export type CliOptions = {
   stdout?: WriteLine;
   stderr?: WriteLine;
   runner?: CommandContext["runner"];
+  clock?: Clock;
 };
 
 export async function runCli(argv: readonly string[], options: CliOptions = {}): Promise<number> {
@@ -28,7 +30,8 @@ export async function runCli(argv: readonly string[], options: CliOptions = {}):
     env: options.env ?? process.env,
     stdout,
     stderr,
-    runner: options.runner ?? createNodeProcessRunner()
+    runner: options.runner ?? createNodeProcessRunner(),
+    clock: options.clock ?? systemClock
   };
 
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
@@ -49,6 +52,8 @@ export async function runCli(argv: readonly string[], options: CliOptions = {}):
         return await workflowCommand(args, context);
       case "run":
         return await runCommand(args, context);
+      case "journal":
+        return await journalCommand(args, context);
       case "codex":
         return await doctorCommand("codex", args, context);
       case "claude":
@@ -79,6 +84,7 @@ export function usage(): string {
     "  baton run resume <runId> [--codex] [--claude]",
     "  baton run approve <runId> [--codex] [--claude] [--reject]",
     "  baton run clean <runId>",
+    "  baton journal sync",
     "  baton codex doctor",
     "  baton claude doctor"
   ].join("\n");

@@ -10,10 +10,13 @@ import {
   loadWorkflows
 } from "@baton/core";
 import type { Run } from "@baton/schemas";
+import type { Workflow } from "@baton/schemas";
 
 import type { CommandContext, CommandResult } from "./context.js";
 import { checkClaude, checkCodex } from "./doctor.js";
+import { maybeExportJournal, type JournalWorkers } from "./journal.js";
 import { createDefaultWorkerRegistry, createWorkerRegistry } from "../registry.js";
+import type { WorkerRegistryResult } from "../registry.js";
 
 export async function runCommand(args: readonly string[], context: CommandContext): Promise<CommandResult> {
   if (args.length === 0) {
@@ -50,7 +53,7 @@ async function executeCommand(args: readonly string[], context: CommandContext):
 
   const workflows = await loadWorkflows({ cwd: context.cwd });
   const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
-  const runService = new RunService({ artifactStore, workflows });
+  const runService = new RunService({ artifactStore, workflows, clock: context.clock });
 
   if (parsed.dryRun) {
     const result = await runService.createRun(parsed.request, {
@@ -62,6 +65,10 @@ async function executeCommand(args: readonly string[], context: CommandContext):
     for (const step of result.plannedSteps) {
       context.stdout(`- ${step.id}: ${step.type} (${step.status})`);
     }
+    await maybeExportJournal(context, result.run, artifactStore.getRunDir(result.run.id), {
+      workflows,
+      workers: workerKindsForRegistry(createDefaultWorkerRegistry())
+    });
     return 0;
   }
 
@@ -79,7 +86,7 @@ async function executeCommand(args: readonly string[], context: CommandContext):
     }
   }
 
-  const executor = createExecutor(context, artifactStore, runService, workflows, { useCodex: parsed.useCodex, useClaude: parsed.useClaude });
+  const { executor, workers } = createExecutor(context, artifactStore, runService, workflows, { useCodex: parsed.useCodex, useClaude: parsed.useClaude });
   warnRegistry(context, parsed.useCodex, parsed.useClaude);
   const result = await executor.start(parsed.request, {
     ...(parsed.workflowId === undefined ? {} : { workflowId: parsed.workflowId }),
@@ -89,7 +96,9 @@ async function executeCommand(args: readonly string[], context: CommandContext):
   printRun(context, result.run);
   printSteps(context, result.run);
   printOutcomeHint(context, result.run);
-  return result.outcome === "failed" || result.outcome === "cancelled" ? 1 : 0;
+  const exitCode = result.outcome === "failed" || result.outcome === "cancelled" ? 1 : 0;
+  await maybeExportJournal(context, result.run, artifactStore.getRunDir(result.run.id), { workflows, workers });
+  return exitCode;
 }
 
 async function statusCommand(args: readonly string[], context: CommandContext): Promise<CommandResult> {
@@ -128,14 +137,16 @@ async function resumeCommand(args: readonly string[], context: CommandContext): 
     }
   }
 
-  const { executor } = await createExecutorFromContext(context, { useCodex: parsed.useCodex, useClaude: parsed.useClaude });
+  const { artifactStore, executor, workflows, workers } = await createExecutorFromContext(context, { useCodex: parsed.useCodex, useClaude: parsed.useClaude });
   warnRegistry(context, parsed.useCodex, parsed.useClaude);
   const result = await executor.resume(parsed.runId);
 
   printRun(context, result.run);
   printSteps(context, result.run);
   printOutcomeHint(context, result.run);
-  return result.outcome === "failed" || result.outcome === "cancelled" ? 1 : 0;
+  const exitCode = result.outcome === "failed" || result.outcome === "cancelled" ? 1 : 0;
+  await maybeExportJournal(context, result.run, artifactStore.getRunDir(result.run.id), { workflows, workers });
+  return exitCode;
 }
 
 async function approveCommand(args: readonly string[], context: CommandContext): Promise<CommandResult> {
@@ -161,7 +172,7 @@ async function approveCommand(args: readonly string[], context: CommandContext):
     }
   }
 
-  const { executor } = await createExecutorFromContext(context, { useCodex: parsed.useCodex, useClaude: parsed.useClaude });
+  const { artifactStore, executor, workflows, workers } = await createExecutorFromContext(context, { useCodex: parsed.useCodex, useClaude: parsed.useClaude });
   const decided = await executor.decide(parsed.runId, {
     decision: parsed.reject ? "rejected" : "approved",
     ...(parsed.note === undefined ? {} : { note: parsed.note })
@@ -170,6 +181,7 @@ async function approveCommand(args: readonly string[], context: CommandContext):
   if (parsed.reject) {
     printRun(context, decided);
     printSteps(context, decided);
+    await maybeExportJournal(context, decided, artifactStore.getRunDir(decided.id), { workflows, workers });
     return 0;
   }
 
@@ -178,7 +190,9 @@ async function approveCommand(args: readonly string[], context: CommandContext):
   printRun(context, result.run);
   printSteps(context, result.run);
   printOutcomeHint(context, result.run);
-  return result.outcome === "failed" || result.outcome === "cancelled" ? 1 : 0;
+  const exitCode = result.outcome === "failed" || result.outcome === "cancelled" ? 1 : 0;
+  await maybeExportJournal(context, result.run, artifactStore.getRunDir(result.run.id), { workflows, workers });
+  return exitCode;
 }
 
 async function cleanCommand(args: readonly string[], context: CommandContext): Promise<CommandResult> {
@@ -188,7 +202,7 @@ async function cleanCommand(args: readonly string[], context: CommandContext): P
   }
 
   const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
-  const runStore = new RunStore({ artifactStore });
+  const runStore = new RunStore({ artifactStore, clock: context.clock });
   const run = await runStore.load(args[0]);
   if (!isTerminalRun(run)) {
     context.stderr(`Cannot clean run ${run.id} while status is ${run.status}.`);
@@ -197,12 +211,14 @@ async function cleanCommand(args: readonly string[], context: CommandContext): P
 
   if (run.cleanedAt !== undefined) {
     context.stdout(`Run ${run.id} already cleaned at ${run.cleanedAt}.`);
+    await maybeExportJournal(context, run, artifactStore.getRunDir(run.id));
     return 0;
   }
 
   if (run.worktreePath === undefined) {
     const cleaned = await runStore.markCleaned(run.id);
     context.stdout(`Run ${cleaned.id} has no worktree to clean.`);
+    await maybeExportJournal(context, cleaned, artifactStore.getRunDir(cleaned.id));
     return 0;
   }
 
@@ -221,6 +237,7 @@ async function cleanCommand(args: readonly string[], context: CommandContext): P
 
   const cleaned = await runStore.markCleaned(run.id);
   context.stdout(`Cleaned worktree for run ${cleaned.id}: ${run.worktreePath}`);
+  await maybeExportJournal(context, cleaned, artifactStore.getRunDir(cleaned.id));
   return 0;
 }
 
@@ -402,12 +419,16 @@ type WorkerSelection = {
 async function createExecutorFromContext(
   context: CommandContext,
   options: WorkerSelection = { useCodex: false, useClaude: false }
-): Promise<{ executor: RunExecutor }> {
+): Promise<{ artifactStore: ArtifactStore; executor: RunExecutor; workflows: Workflow[]; workers: JournalWorkers }> {
   const workflows = await loadWorkflows({ cwd: context.cwd });
   const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
-  const runService = new RunService({ artifactStore, workflows });
+  const runService = new RunService({ artifactStore, workflows, clock: context.clock });
+  const { executor, workers } = createExecutor(context, artifactStore, runService, workflows, options);
   return {
-    executor: createExecutor(context, artifactStore, runService, workflows, options)
+    artifactStore,
+    executor,
+    workflows,
+    workers
   };
 }
 
@@ -415,22 +436,41 @@ function createExecutor(
   context: CommandContext,
   artifactStore: ArtifactStore,
   runService: RunService,
-  workflows: Awaited<ReturnType<typeof loadWorkflows>>,
+  workflows: Workflow[],
   options: WorkerSelection = { useCodex: false, useClaude: false }
-): RunExecutor {
-  const { registry } =
+): { executor: RunExecutor; workers: JournalWorkers } {
+  const registryResult =
     options.useCodex || options.useClaude
       ? createWorkerRegistry({ codex: options.useCodex, claude: options.useClaude, runner: context.runner })
       : createDefaultWorkerRegistry();
-  return new RunExecutor({
-    runService,
-    runStore: new RunStore({ artifactStore }),
-    artifactStore,
-    worktreeManager: new GitWorktreeManager({ runner: context.runner, repoRoot: context.cwd }),
-    workerRegistry: registry,
-    workflows,
-    approvalPolicy: new ApprovalPolicy()
-  });
+  return {
+    executor: new RunExecutor({
+      runService,
+      runStore: new RunStore({ artifactStore, clock: context.clock }),
+      artifactStore,
+      worktreeManager: new GitWorktreeManager({ runner: context.runner, repoRoot: context.cwd }),
+      workerRegistry: registryResult.registry,
+      workflows,
+      approvalPolicy: new ApprovalPolicy(),
+      clock: context.clock
+    }),
+    workers: workerKindsForRegistry(registryResult)
+  };
+}
+
+function workerKindsForRegistry(registry: Pick<WorkerRegistryResult, "codexRoles" | "claudeRoles" | "stubRoles">): JournalWorkers {
+  const { codexRoles, claudeRoles, stubRoles } = registry;
+  const workers: JournalWorkers = {};
+  for (const role of codexRoles) {
+    workers[role] = "codex";
+  }
+  for (const role of claudeRoles) {
+    workers[role] = "claude";
+  }
+  for (const role of stubRoles) {
+    workers[role] = "stub";
+  }
+  return workers;
 }
 
 function printRun(context: CommandContext, run: Run): void {

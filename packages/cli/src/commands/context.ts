@@ -1,4 +1,4 @@
-import type { ProcessRunner } from "@baton/core";
+import type { Clock, ProcessRunner } from "@baton/core";
 
 export type WriteLine = (message: string) => void;
 
@@ -8,6 +8,7 @@ export type CommandContext = {
   stdout: WriteLine;
   stderr: WriteLine;
   runner: ProcessRunner;
+  clock: Clock;
 };
 
 export type CommandResult = number;

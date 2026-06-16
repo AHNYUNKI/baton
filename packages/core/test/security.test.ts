@@ -31,6 +31,7 @@ describe("security regressions", () => {
     expect(content).not.toContain(".baton/runs/\n");
     expect(content).toContain("!.baton/runs/codex-exec-v0.3/");
     expect(content).toContain("!.baton/runs/claude-adapter-v0.4/");
+    expect(content).toContain("!.baton/runs/obsidian-journal-v0.5/");
   });
 });
 

@@ -29,6 +29,7 @@ baton run status <runId>
 baton run resume <runId> [--codex] [--claude]
 baton run approve <runId> [--codex] [--claude] [--reject]
 baton run clean <runId>
+baton journal sync
 baton codex doctor
 baton claude doctor
 ```
@@ -92,6 +93,60 @@ baton run clean <runId>
 `run clean` removes only the worktree path recorded in `run.json`, preserves the
 run artifact directory, and records `cleanedAt`. Active or awaiting-approval
 runs are refused.
+
+## Obsidian Journal Export
+
+Baton can automatically mirror run history into an Obsidian vault when a vault is
+configured. Set the environment variable, or add the same path to
+`.baton/config.json`:
+
+```bash
+export BATON_OBSIDIAN_VAULT="/path/to/Obsidian Vault"
+```
+
+```json
+{
+  "version": 1,
+  "obsidian": {
+    "vault": "/path/to/Obsidian Vault"
+  }
+}
+```
+
+When configured, Baton writes a self-contained journal entry after successful
+`run`, `run resume`, `run approve`, and `run clean` command results. If no vault
+is configured, Baton skips the export without changing the command result. If an
+export fails, Baton prints a warning and preserves the original run exit code.
+
+The exporter only writes below the vault's `Baton/` directory:
+
+```text
+<vault>/Baton/
+  Runs.md
+  Runs/
+    <runId>.md
+    <runId>/
+      request.md
+      run.json
+      analysis.md
+      design.md
+      review.md
+      logs/
+      steps/
+```
+
+Run notes include YAML frontmatter for Dataview, a human-readable summary, step
+status table, selected worker registry (`codex`, `claude`, or `stub`), copied
+artifacts, and embeds for `analysis.md`, `design.md`, and `review.md` when those
+artifacts exist. `Baton/Runs.md` is regenerated as a map-of-content with both a
+Dataview table and a static Markdown fallback table. Existing files outside
+`Baton/` are not modified or deleted.
+
+To backfill an already-created local run history after configuring a vault:
+
+```bash
+baton journal sync
+```
 
 ## Safety Model
 
