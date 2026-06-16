@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "kind": "run-detail",
+  "data": {
+    "run": {
+      "id": "run-1",
+      "request": "Build Baton history",
+      "workflowId": "default",
+      "status": "completed",
+      "dryRun": false,
+      "createdAt": "2026-06-15T00:00:00.000Z",
+      "updatedAt": "2026-06-15T12:00:00.000Z",
+      "worktreePath": "/tmp/baton/.baton/worktrees/run-1",
+      "baseBranch": "main",
+      "cleanedAt": "2026-06-15T13:00:00.000Z",
+      "steps": [
+        {
+          "id": "implement",
+          "type": "implement",
+          "status": "completed",
+          "startedAt": "2026-06-15T10:00:00.000Z",
+          "completedAt": "2026-06-15T10:10:00.000Z",
+          "reason": "Completed by stub worker.",
+          "artifacts": ["analysis.md"],
+          "attempts": 1
+        }
+      ],
+      "approvals": [
+        {
+          "runId": "run-1",
+          "stepId": "implement",
+          "status": "approved",
+          "createdAt": "2026-06-15T10:00:00.000Z",
+          "decidedAt": "2026-06-15T10:05:00.000Z",
+          "note": "Looks good"
+        }
+      ]
+    },
+    "artifacts": ["logs/codex.stdout.log", "request.md", "run.json"]
+  }
+}

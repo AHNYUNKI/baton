@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "kind": "state",
+  "data": {
+    "total": 2,
+    "byStatus": {
+      "planned": 0,
+      "running": 1,
+      "awaiting-approval": 0,
+      "completed": 1,
+      "failed": 0,
+      "cancelled": 0
+    },
+    "recent": [
+      {
+        "runId": "completed-new",
+        "status": "completed",
+        "dryRun": false,
+        "workflowId": "default",
+        "createdAt": "2026-06-16T00:00:00.000Z",
+        "updatedAt": "2026-06-15T12:00:00.000Z",
+        "stepCount": 1,
+        "outcome": "completed"
+      },
+      {
+        "runId": "running-old",
+        "status": "running",
+        "dryRun": true,
+        "workflowId": "default",
+        "createdAt": "2026-06-15T00:00:00.000Z",
+        "stepCount": 2
+      }
+    ]
+  }
+}
