@@ -14,6 +14,7 @@ export class StubWorker implements WorkerAdapter {
       durationMs: 0,
       artifacts: [],
       metadata: {
+        provider: "stub",
         stub: true,
         message: "StubWorker did not execute provider-specific code."
       }

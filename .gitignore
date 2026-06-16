@@ -6,3 +6,5 @@ coverage/
 !.baton/runs/bootstrap-v0.1/
 !.baton/runs/codex-exec-v0.3/
 !.baton/runs/claude-adapter-v0.4/
+!.baton/runs/obsidian-journal-v0.5/
+!.baton/runs/obsidian-journal-v0.5/**

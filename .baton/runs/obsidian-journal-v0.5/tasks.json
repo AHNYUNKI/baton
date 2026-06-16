@@ -1,0 +1,70 @@
+{
+  "version": "1",
+  "runId": "obsidian-journal-v0.5",
+  "buildsOn": "claude-adapter-v0.4",
+  "tasks": [
+    {
+      "id": "task-401",
+      "title": "JournalNoteMeta schema",
+      "description": "packages/schemas/src/journalNote.schema.ts: JournalNoteMeta Zod 스키마 + 추론 타입. 필드: runId, status(RunStatus), dryRun, workflow, createdAt, updatedAt?, outcome?, roles(string[]), workers(Record<string,string>: 역할→'codex'|'claude'|'stub'), stepCount, tags(string[]). index.ts 재export. 유효/무효 입력 테스트.",
+      "targetFiles": ["packages/schemas/src/journalNote.schema.ts", "packages/schemas/src/index.ts", "packages/schemas/test/journalNote.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01"],
+      "testCommands": ["corepack pnpm --filter @baton/schemas test"]
+    },
+    {
+      "id": "task-402",
+      "title": "resolveObsidianVault",
+      "description": "packages/core/src/journal/resolveObsidianVault.ts: resolveObsidianVault({env, config}) → $BATON_OBSIDIAN_VAULT 우선, 없으면 config.obsidian?.vault, 둘 다 없으면 undefined. 공백/유니코드 경로 안전(path API). 단위 테스트(env/config/미설정).",
+      "targetFiles": ["packages/core/src/journal/resolveObsidianVault.ts", "packages/core/test/resolveObsidianVault.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-02", "AC-03"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-403",
+      "title": "ObsidianJournalExporter.exportRun (self-contained)",
+      "description": "packages/core/src/journal/ObsidianJournalExporter.ts + render.ts: exportRun(run, {vaultPath, runDirectory, clock}) → <vault>/Baton/Runs/<safeRunId>.md 요약 노트(YAML frontmatter=JournalNoteMeta + 요청/step 상태 표/사용 워커/outcome 요약) 작성. run 디렉터리 아티팩트를 <vault>/Baton/Runs/<safeRunId>/로 복사(자기완결). analysis/design/review 존재 시 ![[<runId>/analysis.md]]류 임베드, 없으면 생략. 경로 강제: 모든 출력이 <vault>/Baton/ 하위(resolve+startsWith 검증), runId sanitize(경로 분리자/'..' 제거). 삭제 연산 없음(덮어쓰기만, 멱등). render.ts는 순수 헬퍼. 경로 강제/악의적 runId/멱등/복사·임베드 테스트(임시 볼트, fixedClock).",
+      "targetFiles": ["packages/core/src/journal/ObsidianJournalExporter.ts", "packages/core/src/journal/render.ts", "packages/core/src/index.ts", "packages/core/test/obsidianJournalExporter.test.ts"],
+      "dependencies": ["task-401", "task-402"],
+      "acceptanceCriteria": ["AC-04", "AC-05", "AC-06", "AC-07", "AC-08"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-404",
+      "title": "ObsidianJournalExporter.updateIndex (MOC)",
+      "description": "updateIndex(runs, {vaultPath}) → <vault>/Baton/Runs.md 생성/갱신. Dataview 코드블록(table) + 정적 마크다운 표(폴백) 동시 포함. run을 createdAt 내림차순 안정 정렬, 각 run 노트로 wikilink. 재생성(append 아님) 멱등. 정렬/표/멱등 테스트.",
+      "targetFiles": ["packages/core/src/journal/ObsidianJournalExporter.ts", "packages/core/test/obsidianJournalExporter.test.ts"],
+      "dependencies": ["task-403"],
+      "acceptanceCriteria": ["AC-09", "AC-10"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-405",
+      "title": "CLI auto-export hook",
+      "description": "packages/cli/src/commands/run.ts: maybeExportJournal(context, run, runDirectory) 훅을 start/resume/approve 결과 직후 호출. resolveObsidianVault({env: context.env, config})로 볼트 해석 → 미설정이면 no-op(run 정상). 설정 시 exportRun + updateIndex(모든 run 로드). 내보내기 예외는 try/catch로 경고만, run 결과/종료 코드 불변(AC-14). 주입 Clock 사용. 자동 내보내기/미설정 no-op/실패 불변 테스트(임시 볼트 env).",
+      "targetFiles": ["packages/cli/src/commands/run.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-404"],
+      "acceptanceCriteria": ["AC-11", "AC-12", "AC-14"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-406",
+      "title": "(optional) baton journal sync backfill",
+      "description": "packages/cli/src/commands/run.ts(또는 신규 journal.ts) + main.ts: 'baton journal sync'가 기존 모든 run을 로드해 exportRun + updateIndex 백필. 볼트 미설정 시 안내+무해 종료. 백필/인덱스 표시 테스트. (자동만 선택을 존중 — 최초 설정/복구용 보조 명령이며 매 run 수동 로깅 명령은 추가하지 않음.)",
+      "targetFiles": ["packages/cli/src/commands/journal.ts", "packages/cli/src/main.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-405"],
+      "acceptanceCriteria": ["AC-13"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-407",
+      "title": ".gitignore + README + safety + gates",
+      "description": ".gitignore에 '!.baton/runs/obsidian-journal-v0.5/' 추가. README.md에 볼트 설정($BATON_OBSIDIAN_VAULT/config), 자동 기록, 자기완결+Dataview 형태, 안전(볼트 Baton/ 하위만) 문서화. 보안/경로 회귀 테스트: credential/세션 토큰/danger 매치 0(기존 유지), exporter가 볼트 밖 경로로 쓰지 않음·삭제 연산 없음 단언. 전체 게이트 + run --help 스모크, 자체 diff 리뷰, 최종 요약.",
+      "targetFiles": [".gitignore", "README.md", "packages/core/test/security.test.ts"],
+      "dependencies": ["task-406"],
+      "acceptanceCriteria": ["AC-15", "AC-16", "AC-17", "AC-18"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build", "node packages/cli/dist/main.js run --help"]
+    }
+  ]
+}

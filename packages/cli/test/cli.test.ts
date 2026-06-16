@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   ArtifactStore,
@@ -23,6 +23,10 @@ import { createCodexWorkerRegistry, createDefaultWorkerRegistry, createWorkerReg
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 
 describe("@baton/cli", () => {
+  beforeEach(() => {
+    delete process.env.BATON_OBSIDIAN_VAULT;
+  });
+
   it("prints help", async () => {
     const output: string[] = [];
 
@@ -108,6 +112,59 @@ describe("@baton/cli", () => {
     expect(run.steps[0]?.reason).toBe("Completed by stub worker.");
   });
 
+  it("automatically exports an actual run journal with the selected worker registry", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-journal-run-"));
+    const vault = await mkdtemp(path.join(tmpdir(), "baton-cli-vault-"));
+    await writeWorkflow(cwd, ["analyze"]);
+    const mock = createMockProcessRunner([{ stdout: "", stderr: "", exitCode: 0, durationMs: 2 }]);
+
+    expect(
+      await runCli(["run", "Build", "Baton"], {
+        cwd,
+        env: testEnv({ BATON_OBSIDIAN_VAULT: vault }),
+        runner: mock.runner,
+        clock: fixedClock("2026-06-15T00:00:00.000Z")
+      })
+    ).toBe(0);
+
+    const runId = await onlyRunId(cwd);
+    const note = await readFile(path.join(vault, "Baton", "Runs", `${runId}.md`), "utf8");
+    const index = await readFile(path.join(vault, "Baton", "Runs.md"), "utf8");
+
+    expect(note).toContain('status: "completed"');
+    expect(note).toContain('  "analyst": "stub"');
+    expect(note).toContain("updatedAt: \"2026-06-15T00:00:00.000Z\"");
+    expect(await readFile(path.join(vault, "Baton", "Runs", runId, "request.md"), "utf8")).toBe("Build Baton\n");
+    expect(index).toContain("```dataview");
+    expect(index).toContain(`[[Baton/Runs/${runId}]]`);
+  });
+
+  it("records claude workers in journal frontmatter when claude is selected", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-journal-claude-"));
+    const vault = await mkdtemp(path.join(tmpdir(), "baton-cli-vault-"));
+    await writeWorkflow(cwd, ["analyze"]);
+    const mock = createMockProcessRunner([
+      { stdout: "claude 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "", stderr: "", exitCode: 0, durationMs: 2 },
+      { stdout: "# Analysis", stderr: "", exitCode: 0, durationMs: 3 }
+    ]);
+
+    expect(
+      await runCli(["run", "Build", "--claude"], {
+        cwd,
+        env: testEnv({ BATON_OBSIDIAN_VAULT: vault }),
+        runner: mock.runner,
+        clock: fixedClock("2026-06-15T00:00:00.000Z")
+      })
+    ).toBe(0);
+
+    const runId = await onlyRunId(cwd);
+    const note = await readFile(path.join(vault, "Baton", "Runs", `${runId}.md`), "utf8");
+    expect(note).toContain('  "analyst": "claude"');
+    expect(note).toContain(`![[${runId}/analysis.md]]`);
+    expect(await readFile(path.join(vault, "Baton", "Runs", runId, "analysis.md"), "utf8")).toBe("# Analysis");
+  });
+
   it("prints run status from persisted state", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-status-"));
     await writeWorkflow(cwd, ["analyze"]);
@@ -158,6 +215,26 @@ describe("@baton/cli", () => {
       })
     ).toBe(0);
     expect(output.join("\n")).toContain("completed");
+  });
+
+  it("updates the journal after approval resumes a gated run", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-journal-approve-"));
+    const vault = await mkdtemp(path.join(tmpdir(), "baton-cli-vault-"));
+    await writeWorkflow(cwd, ["implement"]);
+    const mock = createMockProcessRunner([
+      { stdout: "", stderr: "", exitCode: 0, durationMs: 2 },
+      { stdout: "", stderr: "", exitCode: 0, durationMs: 2 }
+    ]);
+
+    expect(await runCli(["run", "Build"], { cwd, env: testEnv({ BATON_OBSIDIAN_VAULT: vault }), runner: mock.runner })).toBe(0);
+    const runId = await onlyRunId(cwd);
+    expect(await readFile(path.join(vault, "Baton", "Runs", `${runId}.md`), "utf8")).toContain('status: "awaiting-approval"');
+
+    expect(await runCli(["run", "approve", runId], { cwd, env: testEnv({ BATON_OBSIDIAN_VAULT: vault }), runner: mock.runner })).toBe(0);
+
+    const note = await readFile(path.join(vault, "Baton", "Runs", `${runId}.md`), "utf8");
+    expect(note).toContain('status: "completed"');
+    expect(note).toContain('  "implementer": "stub"');
   });
 
   it("rejects a gated run without resuming workers", async () => {
@@ -490,6 +567,38 @@ describe("@baton/cli", () => {
     expect(codexExecCall?.options?.input).toContain("Build Baton");
   });
 
+  it("exports after resume and records codex workers", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-journal-resume-"));
+    const vault = await mkdtemp(path.join(tmpdir(), "baton-cli-vault-"));
+    await writeWorkflow(cwd, ["implement"]);
+    const artifactStore = new ArtifactStore({ workspaceRoot: cwd });
+    const runStore = new RunStore({ artifactStore, clock: fixedClock("2026-06-15T00:00:00.000Z") });
+    const worktreePath = path.join(cwd, ".baton", "worktrees", "run-1");
+    await artifactStore.writeArtifact("run-1", "request.md", "Build Baton\n");
+    await runStore.save({
+      id: "run-1",
+      request: "Build Baton",
+      workflowId: "default",
+      status: "running",
+      dryRun: false,
+      createdAt: "2026-06-15T00:00:00.000Z",
+      worktreePath,
+      baseBranch: "main",
+      approvals: [{ runId: "run-1", stepId: "implement", status: "approved", createdAt: "2026-06-15T00:00:00.000Z", decidedAt: "2026-06-15T00:00:00.000Z" }],
+      steps: [{ id: "implement", type: "implement", status: "planned" }]
+    });
+    const mock = createMockProcessRunner([
+      { stdout: "codex 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "done", stderr: "", exitCode: 0, durationMs: 3 }
+    ]);
+
+    expect(await runCli(["run", "resume", "run-1", "--codex"], { cwd, env: testEnv({ BATON_OBSIDIAN_VAULT: vault }), runner: mock.runner })).toBe(0);
+
+    const note = await readFile(path.join(vault, "Baton", "Runs", "run-1.md"), "utf8");
+    expect(note).toContain('status: "completed"');
+    expect(note).toContain('  "implementer": "codex"');
+  });
+
   it("supports resume with claude opt-in", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-claude-resume-"));
     await writeWorkflow(cwd, ["analyze"]);
@@ -550,6 +659,73 @@ describe("@baton/cli", () => {
     });
     expect(output.join("\n")).toContain("Cleaned worktree");
     expect((await runStore.load("run-1")).cleanedAt).toBeDefined();
+  });
+
+  it("exports after clean without clobbering inferred worker metadata", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-journal-clean-"));
+    const vault = await mkdtemp(path.join(tmpdir(), "baton-cli-vault-"));
+    await writeWorkflow(cwd, ["analyze"]);
+    const artifactStore = new ArtifactStore({ workspaceRoot: cwd });
+    const runStore = new RunStore({ artifactStore, clock: fixedClock("2026-06-15T00:00:00.000Z") });
+    const worktreePath = path.join(cwd, ".baton", "worktrees", "run-1");
+    await artifactStore.writeArtifact("run-1", "steps/analyze.result.json", `${JSON.stringify({ success: true, metadata: { provider: "claude" } }, null, 2)}\n`);
+    await runStore.save({
+      id: "run-1",
+      request: "Build Baton",
+      workflowId: "default",
+      status: "completed",
+      dryRun: false,
+      createdAt: "2026-06-15T00:00:00.000Z",
+      worktreePath,
+      baseBranch: "main",
+      steps: [{ id: "analyze", type: "analyze", status: "completed" }]
+    });
+    const mock = createMockProcessRunner([{ stdout: "", stderr: "", exitCode: 0, durationMs: 1 }]);
+
+    expect(await runCli(["run", "clean", "run-1"], { cwd, env: testEnv({ BATON_OBSIDIAN_VAULT: vault }), runner: mock.runner })).toBe(0);
+
+    const note = await readFile(path.join(vault, "Baton", "Runs", "run-1.md"), "utf8");
+    const exportedRun = JSON.parse(await readFile(path.join(vault, "Baton", "Runs", "run-1", "run.json"), "utf8")) as Run;
+    expect(note).toContain('  "analyst": "claude"');
+    expect(exportedRun.cleanedAt).toBeDefined();
+  });
+
+  it("treats missing journal config as no-op and keeps export failures non-fatal", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-journal-noop-"));
+    await writeWorkflow(cwd, ["analyze"]);
+    const errors: string[] = [];
+    const mock = createMockProcessRunner([{ stdout: "", stderr: "", exitCode: 0, durationMs: 2 }]);
+
+    expect(await runCli(["run", "Build"], { cwd, env: testEnv(), runner: mock.runner, stderr: (line) => errors.push(line) })).toBe(0);
+    await expect(readdir(path.join(cwd, "Baton"))).rejects.toThrow();
+
+    const vaultFile = path.join(await mkdtemp(path.join(tmpdir(), "baton-cli-vault-file-")), "vault.md");
+    await writeFile(vaultFile, "not a directory", "utf8");
+    expect(await runCli(["run", "Build", "again"], { cwd, env: testEnv({ BATON_OBSIDIAN_VAULT: vaultFile }), runner: mock.runner, stderr: (line) => errors.push(line) })).toBe(0);
+    expect(errors.join("\n")).toContain("Warning: failed to export Obsidian journal");
+  });
+
+  it("backfills existing runs with journal sync", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-journal-sync-"));
+    const vault = await mkdtemp(path.join(tmpdir(), "baton-cli-vault-"));
+    await writeWorkflow(cwd, ["analyze"]);
+    const mock = createMockProcessRunner([{ stdout: "", stderr: "", exitCode: 0, durationMs: 2 }]);
+    const output: string[] = [];
+
+    expect(await runCli(["run", "Build"], { cwd, env: testEnv(), runner: mock.runner })).toBe(0);
+    const runId = await onlyRunId(cwd);
+    expect(
+      await runCli(["journal", "sync"], {
+        cwd,
+        env: testEnv({ BATON_OBSIDIAN_VAULT: vault }),
+        stdout: (line) => output.push(line),
+        clock: fixedClock("2026-06-15T00:00:00.000Z")
+      })
+    ).toBe(0);
+
+    expect(output.join("\n")).toContain("Synced 1 Baton run journal note");
+    expect(await readFile(path.join(vault, "Baton", "Runs", `${runId}.md`), "utf8")).toContain("Build");
+    expect(await readFile(path.join(vault, "Baton", "Runs.md"), "utf8")).toContain(`[[Baton/Runs/${runId}]]`);
   });
 
   it("refuses to clean a non-terminal run", async () => {
@@ -625,4 +801,16 @@ async function writeWorkflow(cwd: string, stepIds: WorkflowStepId[]): Promise<vo
     return ["  - id: analyze", "    name: Analyze", "    type: analyze", "    role: analyst"].join("\n");
   });
   await writeFile(path.join(workflowsDir, "default.workflow.yaml"), ["id: default", "name: Default", "steps:", ...stepBlocks].join("\n"), "utf8");
+}
+
+async function onlyRunId(cwd: string): Promise<string> {
+  const runs = await readdir(path.join(cwd, ".baton", "runs"));
+  expect(runs).toHaveLength(1);
+  return runs[0] ?? "";
+}
+
+function testEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const { BATON_OBSIDIAN_VAULT: _obsidianVault, ...env } = process.env;
+  void _obsidianVault;
+  return { ...env, ...overrides };
 }
