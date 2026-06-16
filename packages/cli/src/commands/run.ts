@@ -1,5 +1,5 @@
 import type { Dirent } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { access, readdir } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -19,7 +19,17 @@ import {
   maxFixAttemptsLimit,
   openDatabase
 } from "@baton/core";
-import { RunStatusSchema, type BatonConfig, type Run, type RunStatus, type Workflow } from "@baton/schemas";
+import {
+  RunStatusSchema,
+  makeEnvelope,
+  type BatonConfig,
+  type Run,
+  type RunDetailJson,
+  type RunListJson,
+  type RunSummaryJson,
+  type RunStatus,
+  type Workflow
+} from "@baton/schemas";
 
 import type { CommandContext, CommandResult } from "./context.js";
 import { checkClaude, checkCodex } from "./doctor.js";
@@ -126,7 +136,8 @@ async function runListCommand(args: readonly string[], context: CommandContext):
     return 1;
   }
 
-  const db = await openDatabase({ path: batonDbPath(context.cwd) });
+  const dbPath = batonDbPath(context.cwd);
+  const db = (await fileExists(dbPath)) ? await openDatabase({ path: dbPath }) : undefined;
   const index = db === undefined ? undefined : new RunIndex({ db });
   const result = await (async () => {
     try {
@@ -142,8 +153,11 @@ async function runListCommand(args: readonly string[], context: CommandContext):
   })();
 
   if (parsed.json) {
-    context.stdout(JSON.stringify(result.runs.map((loadedRun) => toRunListJson(loadedRun.run)), null, 2));
-    printSkipped(context.stderr, result.skipped);
+    const data: RunListJson = {
+      runs: result.runs.map((loadedRun) => toRunSummaryJson(loadedRun.run)),
+      skipped: result.skipped
+    };
+    context.stdout(JSON.stringify(makeEnvelope("run-list", data), null, 2));
     return 0;
   }
 
@@ -168,28 +182,41 @@ async function runListCommand(args: readonly string[], context: CommandContext):
 }
 
 async function runShowCommand(args: readonly string[], context: CommandContext): Promise<CommandResult> {
-  if (args.length !== 1 || args[0] === undefined) {
+  const parsed = parseRunDetailArgs(args);
+  if (parsed === undefined) {
     context.stderr(runUsage());
     return 1;
   }
 
   const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
   const runStore = new RunStore({ artifactStore });
-  const run = await runStore.load(args[0]);
+  const run = await runStore.load(parsed.runId);
   const artifactFiles = await listArtifactFiles(artifactStore.getRunDir(run.id));
+
+  if (parsed.json) {
+    printRunDetailJson(context, run, artifactFiles);
+    return 0;
+  }
 
   printRunDetails(context, run, artifactFiles);
   return 0;
 }
 
 async function statusCommand(args: readonly string[], context: CommandContext): Promise<CommandResult> {
-  if (args.length !== 1 || args[0] === undefined) {
+  const parsed = parseRunDetailArgs(args);
+  if (parsed === undefined) {
     context.stderr(runUsage());
     return 1;
   }
 
-  const runStore = new RunStore({ artifactStore: new ArtifactStore({ workspaceRoot: context.cwd }) });
-  const run = await runStore.load(args[0]);
+  const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
+  const runStore = new RunStore({ artifactStore });
+  const run = await runStore.load(parsed.runId);
+
+  if (parsed.json) {
+    printRunDetailJson(context, run, await listArtifactFiles(artifactStore.getRunDir(run.id)));
+    return 0;
+  }
 
   printRun(context, run);
   printSteps(context, run);
@@ -347,15 +374,9 @@ type ParsedRunListArgs = {
   limit?: number;
 };
 
-type RunListJson = {
+type ParsedRunDetailArgs = {
   runId: string;
-  status: RunStatus;
-  dryRun: boolean;
-  workflowId: string;
-  createdAt: string;
-  updatedAt?: string;
-  stepCount: number;
-  outcome?: RunStatus;
+  json: boolean;
 };
 
 function parseRunListArgs(args: readonly string[]): ParsedRunListArgs | undefined {
@@ -404,6 +425,31 @@ function parseRunListArgs(args: readonly string[]): ParsedRunListArgs | undefine
     ...(status === undefined ? {} : { status }),
     ...(limit === undefined ? {} : { limit })
   };
+}
+
+function parseRunDetailArgs(args: readonly string[]): ParsedRunDetailArgs | undefined {
+  let json = false;
+  const positional: string[] = [];
+
+  for (const arg of args) {
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
+
+    if (arg.startsWith("--")) {
+      return undefined;
+    }
+
+    positional.push(arg);
+  }
+
+  const runId = positional[0];
+  if (positional.length !== 1 || runId === undefined) {
+    return undefined;
+  }
+
+  return { runId, json };
 }
 
 function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefined {
@@ -934,7 +980,7 @@ function workerKindsForRegistry(registry: Pick<WorkerRegistryResult, "codexRoles
   return workers;
 }
 
-function toRunListJson(run: Run): RunListJson {
+export function toRunSummaryJson(run: Run): RunSummaryJson {
   const outcome = runOutcome(run);
   return {
     runId: run.id,
@@ -946,6 +992,14 @@ function toRunListJson(run: Run): RunListJson {
     stepCount: run.steps.length,
     ...(outcome === undefined ? {} : { outcome })
   };
+}
+
+function printRunDetailJson(context: CommandContext, run: Run, artifactFiles: readonly string[]): void {
+  const data: RunDetailJson = {
+    run,
+    artifacts: [...artifactFiles]
+  };
+  context.stdout(JSON.stringify(makeEnvelope("run-detail", data), null, 2));
 }
 
 function printRunDetails(context: CommandContext, run: Run, artifactFiles: readonly string[]): void {
@@ -1096,6 +1150,18 @@ async function listArtifactFiles(directory: string, prefix = ""): Promise<string
   return files;
 }
 
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 function warnStub(context: CommandContext): void {
   const { stubRoles } = createDefaultWorkerRegistry();
   context.stderr(`Warning: using StubWorker for ${stubRoles.join(", ")}.`);
@@ -1184,8 +1250,8 @@ function runUsage(): string {
     "Usage:",
     "  baton run <request> [--dry-run] [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--test-command <command>] [--fix|--no-fix] [--max-fix-attempts <n>] [--workflow <id>] [--project <id>]",
     "  baton run list [--status <status>] [--limit <n>] [--json]",
-    "  baton run show <runId>",
-    "  baton run status <runId>",
+    "  baton run show <runId> [--json]",
+    "  baton run status <runId> [--json]",
     "  baton run resume <runId> [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--test-command <command>] [--fix|--no-fix] [--max-fix-attempts <n>]",
     "  baton run approve <runId> [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--test-command <command>] [--fix|--no-fix] [--max-fix-attempts <n>] [--reject] [--note <text>]",
     "  baton run clean <runId>"

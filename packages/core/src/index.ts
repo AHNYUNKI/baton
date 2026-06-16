@@ -30,6 +30,7 @@ export * from "./runs/RunExecutor.js";
 export * from "./runs/buildFixPrompt.js";
 export * from "./runs/buildStepPrompt.js";
 export * from "./runs/listRuns.js";
+export * from "./runs/detectRunChanges.js";
 export * from "./journal/resolveObsidianVault.js";
 export * from "./journal/ObsidianJournalExporter.js";
 export * from "./journal/render.js";

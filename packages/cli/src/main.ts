@@ -13,6 +13,8 @@ import { initCommand } from "./commands/init.js";
 import { journalCommand } from "./commands/journal.js";
 import { projectCommand } from "./commands/project.js";
 import { runCommand } from "./commands/run.js";
+import { stateCommand } from "./commands/state.js";
+import { watchCommand } from "./commands/watch.js";
 import { workflowCommand } from "./commands/workflow.js";
 
 export type CliOptions = {
@@ -56,6 +58,10 @@ export async function runCli(argv: readonly string[], options: CliOptions = {}):
         return await workflowCommand(args, context);
       case "run":
         return await runCommand(args, context);
+      case "state":
+        return await stateCommand(args, context);
+      case "watch":
+        return await watchCommand(args, context);
       case "journal":
         return await journalCommand(args, context);
       case "db":
@@ -90,11 +96,13 @@ export function usage(): string {
     "  baton workflow list",
     "  baton run <request> [--dry-run] [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--test-command <command>] [--fix|--no-fix] [--max-fix-attempts <n>]",
     "  baton run list [--status <status>] [--limit <n>] [--json]",
-    "  baton run show <runId>",
-    "  baton run status <runId>",
+    "  baton run show <runId> [--json]",
+    "  baton run status <runId> [--json]",
     "  baton run resume <runId> [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--test-command <command>] [--fix|--no-fix] [--max-fix-attempts <n>]",
     "  baton run approve <runId> [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--test-command <command>] [--fix|--no-fix] [--max-fix-attempts <n>] [--reject]",
     "  baton run clean <runId>",
+    "  baton state [--json]",
+    "  baton watch [--interval <s>] [--once]",
     "  baton journal sync",
     "  baton db status",
     "  baton db reindex",

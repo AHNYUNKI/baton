@@ -6,3 +6,4 @@ export * from "./artifact.schema.js";
 export * from "./approval.schema.js";
 export * from "./journalNote.schema.js";
 export * from "./batonConfig.schema.js";
+export * from "./readApi.schema.js";

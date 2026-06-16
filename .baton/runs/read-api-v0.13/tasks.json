@@ -1,0 +1,53 @@
+{
+  "version": "1",
+  "runId": "read-api-v0.13",
+  "buildsOn": "sqlite-index-v0.12",
+  "baseBranch": "origin/main",
+  "tasks": [
+    {
+      "id": "task-R01",
+      "title": "readApi envelope + watch event schema",
+      "description": "packages/schemas/src/readApi.schema.ts: JsonEnvelope { schemaVersion: z.literal(1), kind: string, data: unknown } Zod + 헬퍼(makeEnvelope(kind,data)). WatchEvent { type: enum('run.created','run.updated','run.status-changed','run.removed'), runId, status, ... } Zod. RunSummaryJson/RunDetailJson/StateJson 타입. index re-export. 봉투/이벤트 유효·무효 테스트.",
+      "targetFiles": ["packages/schemas/src/readApi.schema.ts", "packages/schemas/src/index.ts", "packages/schemas/test/readApi.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01"],
+      "testCommands": ["corepack pnpm --filter @baton/schemas test"]
+    },
+    {
+      "id": "task-R02",
+      "title": "Envelope-wrap run list/show/status --json",
+      "description": "packages/cli/src/commands/run.ts: run list --json → makeEnvelope('run-list', { runs:[summary], skipped }). run show/status에 --json 추가 → makeEnvelope('run-detail', { run, artifacts: ArtifactStore 디렉터리 파일 목록 }). 모든 --json은 단일 JSON, 결정적. 기존 run list --json 테스트는 봉투로 의도적 갱신. 파싱·kind·필드 테스트.",
+      "targetFiles": ["packages/cli/src/commands/run.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-R01"],
+      "acceptanceCriteria": ["AC-02", "AC-03", "AC-05", "AC-15"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-R03",
+      "title": "baton state [--json]",
+      "description": "packages/cli/src/commands/state.ts: listRuns(인덱스/파일 폴백) + summarizeRuns로 개요. --json → makeEnvelope('state', { total, byStatus, recent: 최근 N 요약 }). 텍스트 모드 → 총계/상태별/최근 run 사람용 출력. main.ts에 state 라우팅+help. 읽기 전용. json/텍스트/폴백 테스트.",
+      "targetFiles": ["packages/cli/src/commands/state.ts", "packages/cli/src/main.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-R01"],
+      "acceptanceCriteria": ["AC-04", "AC-06", "AC-11", "AC-12"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-R04",
+      "title": "detectRunChanges + baton watch (NDJSON)",
+      "description": "packages/core/src/runs/detectRunChanges.ts(순수): detectRunChanges(prev: RunSummary[], curr: RunSummary[]) → WatchEvent[] (created=신규 id, removed=사라진 id, status-changed=status 변경, updated=updatedAt 변경 같은 status; runId 결정적 정렬). packages/cli/src/commands/watch.ts: baton watch [--interval <s>] [--once]. --once → 현재 스냅샷(listRuns)을 run.created류 이벤트로 NDJSON(한 줄당 1, 개행 종료) 1회 emit 후 종료. 연속 → 초기 스냅샷 emit 후 interval(검증된 양수) 대기 polling: 재스냅샷 → detectRunChanges diff emit. SIGINT/SIGTERM 클린 종료. tight 루프 금지(반드시 interval sleep). 이벤트는 봉투 kind:'event'. main.ts 라우팅. detectRunChanges 4케이스 + watch --once 결정적 NDJSON 테스트.",
+      "targetFiles": ["packages/core/src/runs/detectRunChanges.ts", "packages/core/src/index.ts", "packages/cli/src/commands/watch.ts", "packages/cli/src/main.ts", "packages/core/test/detectRunChanges.test.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-R01", "task-R03"],
+      "acceptanceCriteria": ["AC-07", "AC-08", "AC-09", "AC-10"],
+      "testCommands": ["corepack pnpm --filter @baton/core test", "corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-R05",
+      "title": "docs/INTEGRATION.md + security + gates",
+      "description": "docs/INTEGRATION.md: GUI 통합 계약 — JSON 봉투({schemaVersion,kind,data}), 각 read 명령(run list/show/status, state)의 data 형태, watch NDJSON 이벤트 타입, schemaVersion 정책(additive 우선, 깨짐 시 version 증가), HTTP 서버 미사용(CLI/스트림) 명시. README가 INTEGRATION 링크. 보안 회귀 테스트: credential/세션 토큰/danger/HTTP 서버(createServer/listen) 매치 0. 전체 게이트(v0.1~v0.13 회귀 없음, 봉투 갱신 제외) + run --help 스모크, 자체 diff 리뷰, 최종 요약.",
+      "targetFiles": ["docs/INTEGRATION.md", "README.md", "packages/core/test/security.test.ts"],
+      "dependencies": ["task-R02", "task-R03", "task-R04"],
+      "acceptanceCriteria": ["AC-13", "AC-14", "AC-16"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build", "node packages/cli/dist/main.js run --help"]
+    }
+  ]
+}

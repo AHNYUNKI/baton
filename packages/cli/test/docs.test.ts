@@ -26,6 +26,8 @@ describe("Baton docs", () => {
       "baton run resume <runId>",
       "baton run approve <runId>",
       "baton run clean <runId>",
+      "baton state",
+      "baton watch",
       "baton journal sync",
       "baton codex doctor",
       "baton claude doctor"
@@ -43,6 +45,8 @@ describe("Baton docs", () => {
       "baton run approve <runId>",
       "baton run list",
       "baton run show <runId>",
+      "baton state",
+      "baton watch",
       "baton journal sync",
       "--codex",
       "--claude",
@@ -58,11 +62,13 @@ describe("Baton docs", () => {
   it("links docs from README and states hermetic E2E limits honestly", async () => {
     const usageDoc = await readFile(new URL("../../../docs/USAGE.md", import.meta.url), "utf8");
     const architectureDoc = await readFile(new URL("../../../docs/ARCHITECTURE.md", import.meta.url), "utf8");
+    const integrationDoc = await readFile(new URL("../../../docs/INTEGRATION.md", import.meta.url), "utf8");
     const readme = await readFile(new URL("../../../README.md", import.meta.url), "utf8");
-    const combined = [usageDoc, architectureDoc, readme].join("\n");
+    const combined = [usageDoc, architectureDoc, integrationDoc, readme].join("\n");
 
     expect(readme).toContain("docs/USAGE.md");
     expect(readme).toContain("docs/ARCHITECTURE.md");
+    expect(readme).toContain("docs/INTEGRATION.md");
     expect(combined).toContain("analysis.md");
     expect(combined).toContain("design.md");
     expect(combined).toContain("review.md");
@@ -80,7 +86,7 @@ describe("Baton docs", () => {
 });
 
 async function readDocsText(): Promise<string> {
-  const files = ["docs/USAGE.md", "docs/ARCHITECTURE.md", "README.md"];
+  const files = ["docs/USAGE.md", "docs/ARCHITECTURE.md", "docs/INTEGRATION.md", "README.md"];
   const contents = await Promise.all(files.map((file) => readFile(new URL(`../../../${file}`, import.meta.url), "utf8")));
   return contents.join("\n");
 }

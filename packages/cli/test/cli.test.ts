@@ -17,7 +17,7 @@ import {
   fixedClock
 } from "@baton/core";
 import type { DbClient, DbQueryParams, ProcessRunner } from "@baton/core";
-import type { AgentRole, Run } from "@baton/schemas";
+import { RunDetailEnvelopeSchema, RunListEnvelopeSchema, StateEnvelopeSchema, WatchEventEnvelopeSchema, type AgentRole, type Run } from "@baton/schemas";
 
 import { runCli } from "../src/main.js";
 import { dbCommand } from "../src/commands/db.js";
@@ -40,6 +40,8 @@ describe("@baton/cli", () => {
     expect(output.join("\n")).toContain("baton run <request> [--dry-run]");
     expect(output.join("\n")).toContain("baton config list");
     expect(output.join("\n")).toContain("baton db status");
+    expect(output.join("\n")).toContain("baton state [--json]");
+    expect(output.join("\n")).toContain("baton watch [--interval <s>] [--once]");
   });
 
   it("prints db help", async () => {
@@ -59,8 +61,8 @@ describe("@baton/cli", () => {
 
     expect(code).toBe(0);
     expect(output.join("\n")).toContain("baton run list");
-    expect(output.join("\n")).toContain("baton run show <runId>");
-    expect(output.join("\n")).toContain("baton run status <runId>");
+    expect(output.join("\n")).toContain("baton run show <runId> [--json]");
+    expect(output.join("\n")).toContain("baton run status <runId> [--json]");
     expect(output.join("\n")).toContain("--test-command <command>");
     expect(output.join("\n")).toContain("--no-codex");
     expect(output.join("\n")).toContain("--fix");
@@ -662,19 +664,26 @@ describe("@baton/cli", () => {
 
     expect(await runCli(["run", "list", "--status", "completed", "--limit", "1", "--json"], { cwd, stdout: (line) => output.push(line) })).toBe(0);
 
-    const parsed = JSON.parse(output.join("\n")) as unknown;
-    expect(parsed).toEqual([
-      {
-        runId: "completed-new",
-        status: "completed",
-        dryRun: false,
-        workflowId: "default",
-        createdAt: "2026-06-16T00:00:00.000Z",
-        updatedAt: "2026-06-15T12:00:00.000Z",
-        stepCount: 1,
-        outcome: "completed"
+    const parsed = RunListEnvelopeSchema.parse(JSON.parse(output.join("\n")));
+    expect(parsed).toEqual({
+      schemaVersion: 1,
+      kind: "run-list",
+      data: {
+        runs: [
+          {
+            runId: "completed-new",
+            status: "completed",
+            dryRun: false,
+            workflowId: "default",
+            createdAt: "2026-06-16T00:00:00.000Z",
+            updatedAt: "2026-06-15T12:00:00.000Z",
+            stepCount: 1,
+            outcome: "completed"
+          }
+        ],
+        skipped: 0
       }
-    ]);
+    });
   });
 
   it("reports skipped runs and handles empty history", async () => {
@@ -692,6 +701,81 @@ describe("@baton/cli", () => {
     output.length = 0;
     expect(await runCli(["run", "list"], { cwd: emptyCwd, stdout: (line) => output.push(line) })).toBe(0);
     expect(output.join("\n")).toContain("No runs found.");
+  });
+
+  it("prints state as text and as a state json envelope", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-state-"));
+    await saveRun(cwd, runFixture({ id: "run-old", status: "completed", createdAt: "2026-06-15T00:00:00.000Z" }));
+    await saveRun(cwd, runFixture({ id: "run-new", status: "failed", createdAt: "2026-06-16T00:00:00.000Z" }));
+    const output: string[] = [];
+
+    expect(await runCli(["state"], { cwd, stdout: (line) => output.push(line) })).toBe(0);
+    const text = output.join("\n");
+    expect(text).toContain("Total: 2");
+    expect(text).toContain("- completed: 1");
+    expect(text).toContain("- failed: 1");
+    expect(text).toContain("Recent runs:");
+    expect(text.indexOf("run-new")).toBeLessThan(text.indexOf("run-old"));
+
+    output.length = 0;
+    expect(await runCli(["state", "--json"], { cwd, stdout: (line) => output.push(line) })).toBe(0);
+    const parsed = StateEnvelopeSchema.parse(JSON.parse(output.join("\n")));
+    expect(parsed).toEqual({
+      schemaVersion: 1,
+      kind: "state",
+      data: {
+        total: 2,
+        byStatus: {
+          planned: 0,
+          running: 0,
+          "awaiting-approval": 0,
+          completed: 1,
+          failed: 1,
+          cancelled: 0
+        },
+        recent: [
+          {
+            runId: "run-new",
+            status: "failed",
+            dryRun: false,
+            workflowId: "default",
+            createdAt: "2026-06-16T00:00:00.000Z",
+            updatedAt: "2026-06-15T12:00:00.000Z",
+            stepCount: 1,
+            outcome: "failed"
+          },
+          {
+            runId: "run-old",
+            status: "completed",
+            dryRun: false,
+            workflowId: "default",
+            createdAt: "2026-06-15T00:00:00.000Z",
+            updatedAt: "2026-06-15T12:00:00.000Z",
+            stepCount: 1,
+            outcome: "completed"
+          }
+        ]
+      }
+    });
+  });
+
+  it("prints watch --once as deterministic event NDJSON", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-watch-"));
+    const output: string[] = [];
+    await saveRun(cwd, runFixture({ id: "run-b", status: "running", createdAt: "2026-06-16T00:00:00.000Z" }));
+    await saveRun(cwd, runFixture({ id: "run-a", status: "completed", createdAt: "2026-06-15T00:00:00.000Z" }));
+
+    expect(await runCli(["watch", "--once"], { cwd, stdout: (line) => output.push(line) })).toBe(0);
+
+    expect(output).toHaveLength(2);
+    const events = output.map((line) => WatchEventEnvelopeSchema.parse(JSON.parse(line)));
+    expect(events.map((event) => [event.kind, event.data.type, event.data.runId])).toEqual([
+      ["event", "run.created", "run-a"],
+      ["event", "run.created", "run-b"]
+    ]);
+    expect(events[0]?.schemaVersion).toBe(1);
+    expect(events[0]?.data.status).toBe("completed");
+    expect(events[1]?.data.status).toBe("running");
   });
 
   it("prints detailed run show output", async () => {
@@ -747,6 +831,35 @@ describe("@baton/cli", () => {
     expect(text).toContain("run.json");
   });
 
+  it("prints run show and status as run-detail json envelopes", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-show-json-"));
+    await saveRun(
+      cwd,
+      runFixture({
+        id: "run-1",
+        request: "Build Baton history",
+        status: "completed",
+        steps: [{ id: "analyze", type: "analyze", status: "completed" }]
+      }),
+      {
+        "request.md": "Build Baton history\n",
+        "logs/codex.stdout.log": "done\n"
+      }
+    );
+
+    const showOutput: string[] = [];
+    expect(await runCli(["run", "show", "run-1", "--json"], { cwd, stdout: (line) => showOutput.push(line) })).toBe(0);
+    const showParsed = RunDetailEnvelopeSchema.parse(JSON.parse(showOutput.join("\n")));
+    expect(showParsed.kind).toBe("run-detail");
+    expect(showParsed.data.run.id).toBe("run-1");
+    expect(showParsed.data.artifacts).toEqual(["logs/codex.stdout.log", "request.md", "run.json"]);
+
+    const statusOutput: string[] = [];
+    expect(await runCli(["run", "status", "run-1", "--json"], { cwd, stdout: (line) => statusOutput.push(line) })).toBe(0);
+    const statusParsed = RunDetailEnvelopeSchema.parse(JSON.parse(statusOutput.join("\n")));
+    expect(statusParsed).toEqual(showParsed);
+  });
+
   it("returns non-zero when run show cannot find the run", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-show-missing-"));
     const errors: string[] = [];
@@ -756,7 +869,7 @@ describe("@baton/cli", () => {
     expect(errors.join("\n")).toContain("Run state not found: missing");
   });
 
-  it("keeps run list and show read-only", async () => {
+  it("keeps read API commands read-only", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-readonly-"));
     await saveRun(cwd, runFixture({ id: "run-1", status: "completed" }));
     const runPath = path.join(cwd, ".baton", "runs", "run-1", "run.json");
@@ -766,6 +879,9 @@ describe("@baton/cli", () => {
 
     expect(await runCli(["run", "list"], { cwd, runner: mock.runner, stdout: (line) => output.push(line) })).toBe(0);
     expect(await runCli(["run", "show", "run-1"], { cwd, runner: mock.runner, stdout: (line) => output.push(line) })).toBe(0);
+    expect(await runCli(["run", "status", "run-1", "--json"], { cwd, runner: mock.runner, stdout: (line) => output.push(line) })).toBe(0);
+    expect(await runCli(["state"], { cwd, runner: mock.runner, stdout: (line) => output.push(line) })).toBe(0);
+    expect(await runCli(["watch", "--once"], { cwd, runner: mock.runner, stdout: (line) => output.push(line) })).toBe(0);
 
     expect(await readFile(runPath, "utf8")).toBe(before);
     expect(mock.calls).toHaveLength(0);
