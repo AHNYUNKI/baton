@@ -40,12 +40,13 @@ export const DDL_STATEMENTS: Record<BatonTableName, string> = {
   runs: `
     CREATE TABLE IF NOT EXISTS runs (
       id TEXT PRIMARY KEY,
-      request TEXT NOT NULL,
-      workflow_id TEXT NOT NULL,
-      project_id TEXT,
       status TEXT NOT NULL,
       dry_run INTEGER NOT NULL,
-      created_at TEXT NOT NULL
+      workflow_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT,
+      step_count INTEGER NOT NULL,
+      outcome TEXT
     );
   `,
   run_steps: `

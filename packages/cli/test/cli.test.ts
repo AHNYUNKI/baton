@@ -16,10 +16,11 @@ import {
   createMockProcessRunner,
   fixedClock
 } from "@baton/core";
-import type { ProcessRunner } from "@baton/core";
+import type { DbClient, DbQueryParams, ProcessRunner } from "@baton/core";
 import type { AgentRole, Run } from "@baton/schemas";
 
 import { runCli } from "../src/main.js";
+import { dbCommand } from "../src/commands/db.js";
 import { resolveRunOptions, resolveTestCommand } from "../src/commands/run.js";
 import { createCodexWorkerRegistry, createDefaultWorkerRegistry, createWorkerRegistry } from "../src/registry.js";
 
@@ -38,6 +39,17 @@ describe("@baton/cli", () => {
     expect(code).toBe(0);
     expect(output.join("\n")).toContain("baton run <request> [--dry-run]");
     expect(output.join("\n")).toContain("baton config list");
+    expect(output.join("\n")).toContain("baton db status");
+  });
+
+  it("prints db help", async () => {
+    const output: string[] = [];
+
+    const code = await runCli(["db", "--help"], { stdout: (line) => output.push(line) });
+
+    expect(code).toBe(0);
+    expect(output.join("\n")).toContain("baton db status");
+    expect(output.join("\n")).toContain("baton db reindex");
   });
 
   it("prints run help", async () => {
@@ -1504,6 +1516,76 @@ describe("@baton/cli", () => {
     expect(mock.calls).toHaveLength(0);
   });
 
+  it("prints db status with index row count", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-db-status-"));
+    const output: string[] = [];
+    const db = new FakeDbClient();
+    await db.execute("INSERT INTO runs", ["run-1"]);
+
+    const code = await dbCommand(["status"], commandContext(cwd, output), {
+      openDatabase: async () => db
+    });
+
+    expect(code).toBe(0);
+    expect(output.join("\n")).toContain(path.join(cwd, ".baton", "baton.db"));
+    expect(output.join("\n")).toContain("SQLite: available");
+    expect(output.join("\n")).toContain("runs rows: 1");
+    expect(db.closed).toBe(true);
+  });
+
+  it("reports db status as unavailable without failing", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-db-status-unavailable-"));
+    const output: string[] = [];
+
+    const code = await dbCommand(["status"], commandContext(cwd, output), {
+      openDatabase: async () => undefined
+    });
+
+    expect(code).toBe(0);
+    expect(output.join("\n")).toContain("SQLite: unavailable");
+  });
+
+  it("reindexes db rows from run.json files", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-db-reindex-"));
+    const output: string[] = [];
+    const db = new FakeDbClient();
+    await saveRun(cwd, runFixture({ id: "run-1", status: "completed" }));
+
+    const code = await dbCommand(["reindex"], commandContext(cwd, output), {
+      openDatabase: async () => db
+    });
+
+    expect(code).toBe(0);
+    expect(output.join("\n")).toContain("Reindexed 1 runs");
+    expect(db.rowIds()).toEqual(["run-1"]);
+    expect(db.closed).toBe(true);
+  });
+
+  it("refuses db reindex when sqlite is unavailable", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-db-reindex-unavailable-"));
+    const errors: string[] = [];
+
+    const code = await dbCommand(
+      ["reindex"],
+      commandContext(cwd, [], errors),
+      {
+        openDatabase: async () => undefined
+      }
+    );
+
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("SQLite is unavailable");
+  });
+
+  it("rejects unknown db subcommands", async () => {
+    const errors: string[] = [];
+
+    expect(await dbCommand(["unknown"], commandContext(process.cwd(), [], errors))).toBe(1);
+
+    expect(errors.join("\n")).toContain("Unknown db command");
+    expect(errors.join("\n")).toContain("baton db status");
+  });
+
   it("returns non-zero for unknown commands and missing args", async () => {
     const errors: string[] = [];
 
@@ -1567,6 +1649,60 @@ function runFixture(overrides: Partial<Run> = {}): Run {
     steps: [{ id: "analyze", type: "analyze", status: "completed" }],
     ...overrides
   };
+}
+
+function commandContext(cwd: string, output: string[] = [], errors: string[] = []) {
+  return {
+    cwd,
+    env: testEnv(),
+    stdout: (line: string): void => {
+      output.push(line);
+    },
+    stderr: (line: string): void => {
+      errors.push(line);
+    },
+    runner: createMockProcessRunner().runner,
+    clock: fixedClock("2026-06-15T00:00:00.000Z")
+  };
+}
+
+class FakeDbClient implements DbClient {
+  public closed = false;
+  private readonly rows = new Map<string, DbQueryParams>();
+
+  public rowIds(): string[] {
+    return [...this.rows.keys()].sort();
+  }
+
+  public async execute(sql: string, params: DbQueryParams = []): Promise<void> {
+    if (sql.includes("CREATE TABLE IF NOT EXISTS runs")) {
+      return;
+    }
+    if (sql.trim() === "DELETE FROM runs") {
+      this.rows.clear();
+      return;
+    }
+    if (sql.includes("INSERT INTO runs")) {
+      const runId = params[0];
+      if (typeof runId !== "string") {
+        throw new Error("Expected run id parameter.");
+      }
+      this.rows.set(runId, params);
+      return;
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  }
+
+  public async query<T extends Record<string, unknown>>(sql: string): Promise<T[]> {
+    if (sql.includes("COUNT(*) AS count")) {
+      return [{ count: this.rows.size } as unknown as T];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  }
+
+  public async close(): Promise<void> {
+    this.closed = true;
+  }
 }
 
 function testEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {

@@ -18,6 +18,10 @@ export function workspaceDir(cwd: string = process.cwd()): string {
   return path.join(path.resolve(cwd), ".baton");
 }
 
+export function batonDbPath(cwd: string = process.cwd()): string {
+  return path.join(workspaceDir(cwd), "baton.db");
+}
+
 export function runsDir(cwd: string = process.cwd()): string {
   return path.join(workspaceDir(cwd), "runs");
 }

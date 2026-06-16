@@ -5,6 +5,7 @@ import path from "node:path";
 import { RunSchema, RunStatusSchema, type Run, type RunStatus } from "@baton/schemas";
 
 import { runsDir } from "../config/paths.js";
+import type { RunIndex } from "./RunIndex.js";
 
 export type LoadedRun = {
   run: Run;
@@ -15,6 +16,7 @@ export type ListRunsOptions = {
   cwd: string;
   status?: RunStatus;
   limit?: number;
+  index?: Pick<RunIndex, "list"> & Partial<Pick<RunIndex, "count">>;
 };
 
 export type ListRunsResult = {
@@ -30,6 +32,25 @@ export type RunSummary = {
 type SummarizableRun = LoadedRun | Run;
 
 export async function listRuns(options: ListRunsOptions): Promise<ListRunsResult> {
+  if (options.index !== undefined) {
+    try {
+      const indexed = await options.index.list({
+        cwd: options.cwd,
+        ...(options.status === undefined ? {} : { status: options.status }),
+        ...(options.limit === undefined ? {} : { limit: options.limit })
+      });
+      if (indexed.runs.length > 0 && indexed.skipped === 0 && (await indexMatchesRunDirectories(options))) {
+        return indexed;
+      }
+    } catch {
+      return listRunsFromFiles(options);
+    }
+  }
+
+  return listRunsFromFiles(options);
+}
+
+export async function listRunsFromFiles(options: Omit<ListRunsOptions, "index">): Promise<ListRunsResult> {
   const directory = runsDir(options.cwd);
   const entries = await readRunDirectoryEntries(directory);
   if (entries === undefined) {
@@ -59,6 +80,24 @@ export async function listRuns(options: ListRunsOptions): Promise<ListRunsResult
   const limitedRuns = options.limit === undefined ? filteredRuns : filteredRuns.slice(0, options.limit);
 
   return { runs: limitedRuns, skipped };
+}
+
+async function indexMatchesRunDirectories(options: ListRunsOptions): Promise<boolean> {
+  if (options.index?.count === undefined) {
+    return true;
+  }
+
+  const entries = await readRunDirectoryEntries(runsDir(options.cwd));
+  const directoryCount = entries?.filter((entry) => entry.isDirectory()).length ?? 0;
+  return (await options.index.count()) === directoryCount;
+}
+
+export async function readRunFile(runPath: string): Promise<Run | undefined> {
+  return readRun(runPath);
+}
+
+export function compareRunIds(left: string, right: string): number {
+  return compareString(left, right);
 }
 
 export function summarizeRuns(runs: readonly SummarizableRun[]): RunSummary {

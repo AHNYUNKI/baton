@@ -126,6 +126,7 @@ After success, inspect history and artifacts:
 baton run list
 baton run list --status completed --limit 10
 baton run show <runId>
+baton db status
 ```
 
 Expected run artifacts include:
@@ -141,6 +142,28 @@ Expected run artifacts include:
   steps/
   events.jsonl
 ```
+
+## Rebuild The Run Index
+
+Run files remain the source of truth. Baton can also maintain a local SQLite
+metadata index at `.baton/baton.db` when Node's built-in `node:sqlite` module is
+available. History commands fall back to scanning `.baton/runs/*/run.json` when
+the driver or index is unavailable.
+
+Check whether the index can be opened and how many rows it contains:
+
+```bash
+baton db status
+```
+
+Rebuild the derived `runs` table from the current run files:
+
+```bash
+baton db reindex
+```
+
+`db reindex` does not rewrite `run.json` or artifacts. The database and SQLite
+sidecar files are ignored by git.
 
 ### Real Worker Run
 

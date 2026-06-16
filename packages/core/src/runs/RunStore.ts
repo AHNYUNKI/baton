@@ -6,19 +6,26 @@ import { RunSchema, type Run } from "@baton/schemas";
 import type { ArtifactStore } from "../artifacts/ArtifactStore.js";
 import type { Clock } from "../ports/Clock.js";
 import { systemClock } from "../ports/Clock.js";
+import type { RunIndex } from "./RunIndex.js";
 
 export type RunStoreOptions = {
   artifactStore: ArtifactStore;
   clock?: Clock;
+  index?: Pick<RunIndex, "upsert">;
+  warn?: (message: string) => void;
 };
 
 export class RunStore {
   private readonly artifactStore: ArtifactStore;
   private readonly clock: Clock;
+  private readonly index: Pick<RunIndex, "upsert"> | undefined;
+  private readonly warn: (message: string) => void;
 
   public constructor(options: RunStoreOptions) {
     this.artifactStore = options.artifactStore;
     this.clock = options.clock ?? systemClock;
+    this.index = options.index;
+    this.warn = options.warn ?? ((message): void => console.warn(message));
   }
 
   public async save(run: Run): Promise<Run> {
@@ -32,6 +39,14 @@ export class RunStore {
 
     await writeFile(tempPath, `${JSON.stringify(updatedRun, null, 2)}\n`, "utf8");
     await rename(tempPath, runPath);
+
+    if (this.index !== undefined) {
+      try {
+        await this.index.upsert(updatedRun);
+      } catch (error) {
+        this.warn(`Failed to update run index for ${updatedRun.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
 
     return updatedRun;
   }

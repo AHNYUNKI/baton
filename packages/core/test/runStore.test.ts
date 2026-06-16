@@ -61,6 +61,57 @@ describe("RunStore", () => {
     });
   });
 
+  it("upserts an injected index after saving run.json", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "baton-run-store-index-"));
+    const artifactStore = new ArtifactStore({ workspaceRoot });
+    const upserts: Run[] = [];
+    const store = new RunStore({
+      artifactStore,
+      clock: fixedClock("2026-06-15T00:00:01.000Z"),
+      index: {
+        async upsert(run: Run): Promise<void> {
+          upserts.push(run);
+        }
+      }
+    });
+
+    const saved = await store.save(runFixture());
+
+    expect(upserts).toEqual([saved]);
+    expect(JSON.parse(await readFile(path.join(artifactStore.getRunDir("run-1"), "run.json"), "utf8"))).toEqual(saved);
+  });
+
+  it("keeps save best-effort when index upsert fails", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "baton-run-store-index-fail-"));
+    const artifactStore = new ArtifactStore({ workspaceRoot });
+    const warnings: string[] = [];
+    const store = new RunStore({
+      artifactStore,
+      clock: fixedClock("2026-06-15T00:00:01.000Z"),
+      warn: (message) => warnings.push(message),
+      index: {
+        async upsert(): Promise<void> {
+          throw new Error("index write failed");
+        }
+      }
+    });
+
+    const saved = await store.save(runFixture());
+
+    expect(saved.updatedAt).toBe("2026-06-15T00:00:01.000Z");
+    expect((await store.load("run-1")).updatedAt).toBe("2026-06-15T00:00:01.000Z");
+    expect(warnings.join("\n")).toContain("index write failed");
+  });
+
+  it("does not require an index", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "baton-run-store-no-index-"));
+    const artifactStore = new ArtifactStore({ workspaceRoot });
+    const store = new RunStore({ artifactStore, clock: fixedClock("2026-06-15T00:00:01.000Z") });
+
+    await expect(store.save(runFixture())).resolves.toMatchObject({ id: "run-1" });
+    await expect(readFile(path.join(artifactStore.getRunDir("run-1"), "run.json"), "utf8")).resolves.toContain("\"id\": \"run-1\"");
+  });
+
   it("marks a run as cleaned while preserving the run record", async () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "baton-run-store-"));
     const artifactStore = new ArtifactStore({ workspaceRoot });

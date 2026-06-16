@@ -20,7 +20,8 @@ packages/cli
 ```
 
 Runtime dependencies are intentionally narrow: `zod` for validation and `yaml`
-for bundled/local workflow and agent files.
+for bundled/local workflow and agent files. SQLite support uses Node's built-in
+`node:sqlite` module behind a guarded adapter.
 
 ## Pipeline
 
@@ -126,8 +127,12 @@ planned -> running -> awaiting-approval -> running -> completed
 ```
 
 `baton run list`, `baton run show <runId>`, and `baton run status <runId>` read
-persisted state from `.baton/runs/<runId>/run.json`. List and show commands are
-read-only and do not call workers or mutate the run file.
+persisted state from `.baton/runs/<runId>/run.json`. `run.json` remains the
+source of truth. The optional SQLite database at `.baton/baton.db` stores a
+derived `runs` metadata index for faster lookup and future GUI binding.
+`RunIndex` can be rebuilt from files with `baton db reindex`; if `node:sqlite`
+is unavailable or the index is empty/stale, history lookup falls back to file
+scanning. List and show commands do not call workers or mutate the run file.
 
 `events.jsonl` stores step and fix-loop events. It is append-only for execution
 events and is copied into the journal export with the rest of the run directory.
@@ -160,6 +165,8 @@ process is invoked by the canonical E2E test.
 - Implementation and fix roles are approval-gated by default.
 - The fix loop is opt-in and capped by `maxFixAttempts` from 1 to 5.
 - Test commands are executed without a shell.
+- SQLite writes use parameter binding through `DbClient`, and the database is a
+  derived local index rather than authoritative run state.
 - Journal export writes only below `<vault>/Baton/`.
 - Read-only history commands keep run state unchanged.
 

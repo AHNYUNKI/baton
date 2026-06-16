@@ -2,6 +2,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 coverage/
+.baton/baton.db
+.baton/baton.db-wal
+.baton/baton.db-shm
 .baton/runs/*
 !.baton/runs/bootstrap-v0.1/
 !.baton/runs/codex-exec-v0.3/

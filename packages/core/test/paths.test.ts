@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { batonHome, runDir, runsDir, workspaceDir } from "../src/index.js";
+import { batonDbPath, batonHome, runDir, runsDir, workspaceDir } from "../src/index.js";
 
 describe("paths", () => {
   it("uses BATON_HOME when provided", () => {
@@ -13,6 +13,7 @@ describe("paths", () => {
     const cwd = "/tmp/project";
 
     expect(workspaceDir(cwd)).toBe(path.join(cwd, ".baton"));
+    expect(batonDbPath(cwd)).toBe(path.join(cwd, ".baton", "baton.db"));
     expect(runsDir(cwd)).toBe(path.join(cwd, ".baton", "runs"));
     expect(runDir("run-1", cwd)).toBe(path.join(cwd, ".baton", "runs", "run-1"));
   });

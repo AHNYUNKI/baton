@@ -71,6 +71,8 @@ baton run resume <runId> [--codex|--no-codex] [--claude|--no-claude] [--test|--n
 baton run approve <runId> [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--fix|--no-fix] [--reject]
 baton run clean <runId>
 baton journal sync
+baton db status
+baton db reindex
 baton codex doctor
 baton claude doctor
 ```
@@ -307,6 +309,36 @@ baton run show <runId>
 It prints the request, step timings and reasons, approvals, worktree and cleanup
 metadata, and the files currently stored in `.baton/runs/<runId>/`.
 
+## SQLite Run Index
+
+Baton keeps `run.json` files as the source of truth. The local SQLite database
+at `.baton/baton.db` is a derived index for run metadata, not a replacement for
+the artifact files. If `node:sqlite` is unavailable, the database cannot be
+opened, or the index is empty or stale, Baton falls back to scanning
+`.baton/runs/*/run.json`.
+
+Inspect index availability and row count:
+
+```bash
+baton db status
+```
+
+Rebuild the `runs` index from the current run files:
+
+```bash
+baton db reindex
+```
+
+`baton db reindex` deletes and repopulates only the derived `runs` table. It
+does not rewrite run artifacts. The database file and SQLite sidecar files are
+ignored by git:
+
+```text
+.baton/baton.db
+.baton/baton.db-wal
+.baton/baton.db-shm
+```
+
 ## Obsidian Journal Export
 
 Baton can automatically mirror run history into an Obsidian vault when a vault is
@@ -380,6 +412,8 @@ baton journal sync
 - The `--fix` loop is opt-in through a flag or config and capped by
   `--max-fix-attempts`; no unbounded retry loop is used.
 - Test commands are passed as `(command, args[])` with shell execution disabled.
+- SQLite is accessed through `node:sqlite` behind a guarded `DbClient`; run
+  files remain authoritative and SQL values are bound as parameters.
 - The default Codex sandbox is `workspace-write`.
 - The default Claude adapter uses non-mutating print mode and avoids write/edit
   or broad access flags.
@@ -398,14 +432,14 @@ node packages/cli/dist/main.js run --help
 ```
 
 Runtime dependencies are intentionally limited to `zod` and `yaml`; the rest are
-development tools for TypeScript and tests.
+development tools for TypeScript and tests. SQLite uses Node's built-in
+`node:sqlite` module when available.
 
 ## v0.8 Non-Goals
 
 - macOS app, web service, or deployment automation.
 - LLM-written final prose, git diff capture, real PR creation, failure-run
-  finalize, fix loops, or SQLite-backed run state.
-- Real SQLite persistence.
+  finalize, fix loops, or SQLite-as-source-of-truth run state.
 - Automatic worktree cleanup.
 - Push, deploy, or package-installing command paths.
 - ESLint or Prettier configuration.
@@ -416,7 +450,7 @@ development tools for TypeScript and tests.
 
 ## Follow-Up TODOs
 
-- Add an actual SQLite driver and migration runner behind `DbClient`.
+- Add a migration runner and broader domain indexes behind `DbClient`.
 - Add OpenAI Responses adapters behind the worker interface.
 - Capture worktree diffs as first-class run artifacts.
 - Add optional automatic cleanup policies for retained worktrees.
