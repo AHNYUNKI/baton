@@ -52,10 +52,10 @@ public final class RunsStore: ObservableObject {
     @Published public private(set) var errorMessage: String?
     @Published public var selectedRunId: String?
 
-    private let client: BatonClient
+    private let client: any BatonClientProtocol
     private var watchTask: Task<Void, Never>?
 
-    public init(client: BatonClient = BatonClient()) {
+    public init(client: any BatonClientProtocol = BatonClient()) {
         self.client = client
         self.runs = []
         self.state = nil
@@ -89,6 +89,21 @@ public final class RunsStore: ObservableObject {
         }
     }
 
+    public func startRun(request: String, options: StartRunOptions = StartRunOptions()) async throws {
+        isLoading = true
+        do {
+            _ = try await client.startRun(request: request, options: options)
+            errorMessage = nil
+            selectedRunId = nil
+            isLoading = false
+            await load()
+        } catch {
+            isLoading = false
+            errorMessage = error.localizedDescription
+            throw error
+        }
+    }
+
     public func select(runId: String?) async {
         selectedRunId = runId
         guard let runId else {
@@ -112,7 +127,7 @@ public final class RunsStore: ObservableObject {
         stopWatching()
         watchTask = Task { [weak self, client] in
             do {
-                for try await event in client.watch(intervalSeconds: intervalSeconds) {
+                for try await event in client.watch(intervalSeconds: intervalSeconds, once: false) {
                     guard let self else {
                         return
                     }
@@ -143,19 +158,19 @@ public final class RunsStore: ObservableObject {
 
     public func approveSelected(note: String? = nil) async {
         await performSelectedMutation { runId in
-            try await client.approve(runId: runId, note: note)
+            try await client.approve(runId: runId, reject: false, note: note, options: ResumeRunOptions())
         }
     }
 
     public func rejectSelected(note: String? = nil) async {
         await performSelectedMutation { runId in
-            try await client.approve(runId: runId, reject: true, note: note)
+            try await client.approve(runId: runId, reject: true, note: note, options: ResumeRunOptions())
         }
     }
 
     public func resumeSelected() async {
         await performSelectedMutation { runId in
-            try await client.resume(runId: runId)
+            try await client.resume(runId: runId, options: ResumeRunOptions())
         }
     }
 
