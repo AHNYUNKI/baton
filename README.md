@@ -26,6 +26,8 @@ baton run "<request>" --codex
 baton run "<request>" --claude
 baton run "<request>" --codex --claude
 baton run "<request>" --test --test-command "pnpm test"
+baton run "<request>" --codex --test --test-command "pnpm test" --fix
+baton run "<request>" --codex --test --test-command "pnpm test" --fix --max-fix-attempts 3
 baton run "<request>" --codex --claude --test --test-command "pnpm test"
 baton run "<request>" --dry-run
 baton run list
@@ -33,8 +35,8 @@ baton run list --status completed --limit 10
 baton run list --json
 baton run show <runId>
 baton run status <runId>
-baton run resume <runId> [--codex] [--claude] [--test]
-baton run approve <runId> [--codex] [--claude] [--test] [--reject]
+baton run resume <runId> [--codex] [--claude] [--test] [--fix]
+baton run approve <runId> [--codex] [--claude] [--test] [--fix] [--reject]
 baton run clean <runId>
 baton journal sync
 baton codex doctor
@@ -89,6 +91,28 @@ include write/edit or broad access flags.
 Codex handles implementation/fix roles, `release_writer` remains on
 `FinalizeWriter`, and every other role remains stubbed.
 
+`--fix` opts into a bounded fix loop for fixable workflow steps. In v0.9 the
+default fixable step is `test`: if the initial test step fails, Baton runs the
+`fixer` role once by default, then reruns the same test step in the run
+worktree. If the retry passes, the workflow continues; if all attempts fail, the
+run is marked failed and remaining steps are skipped as before. Increase the
+hard bound with:
+
+```bash
+baton run "<request>" --codex --test --test-command "pnpm test" --fix --max-fix-attempts 3
+```
+
+`--max-fix-attempts` must be an integer from 1 to 5. The loop is strictly
+bounded: each attempt is one fixer call plus one retry of the failed step, and
+execution stops on success or when the bound is exhausted. Without `--fix`, a
+failed test step keeps the previous behavior and fails the run immediately.
+
+The fixer uses the same registry as other workers. `--codex` registers Codex for
+`fixer`; without `--codex`, Baton warns that `fixer` is still a `StubWorker`, so
+no provider-specific code change is attempted. Fixer calls and retries run with
+`cwd` set to the isolated run worktree, and attempts are recorded in `run.json`
+plus fix events and per-attempt logs.
+
 `run "<request>" --test` opts into real test execution for the `tester` role
 only. The command can be supplied as a flag:
 
@@ -122,10 +146,12 @@ baton run approve <runId> --codex
 baton run approve <runId> --claude
 baton run approve <runId> --codex --claude
 baton run approve <runId> --test --test-command "pnpm test"
+baton run approve <runId> --test --test-command "pnpm test" --fix
 baton run resume <runId> --codex
 baton run resume <runId> --claude
 baton run resume <runId> --codex --claude
 baton run resume <runId> --test --test-command "pnpm test"
+baton run resume <runId> --test --test-command "pnpm test" --fix
 ```
 
 Reject a pending gate with:
@@ -257,6 +283,8 @@ baton journal sync
   resolved command.
 - Implementation and fix steps still pass through approval gates.
 - Workers run with `cwd` set to the run worktree path.
+- The `--fix` loop is opt-in and capped by `--max-fix-attempts`; no unbounded
+  retry loop is used.
 - Test commands are passed as `(command, args[])` with shell execution disabled.
 - The default Codex sandbox is `workspace-write`.
 - The default Claude adapter uses non-mutating print mode and avoids write/edit

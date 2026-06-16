@@ -49,6 +49,8 @@ describe("@baton/cli", () => {
     expect(output.join("\n")).toContain("baton run show <runId>");
     expect(output.join("\n")).toContain("baton run status <runId>");
     expect(output.join("\n")).toContain("--test-command <command>");
+    expect(output.join("\n")).toContain("--fix");
+    expect(output.join("\n")).toContain("--max-fix-attempts <n>");
   });
 
   it("resolves test commands from flag before config", () => {
@@ -274,6 +276,93 @@ describe("@baton/cli", () => {
     expect(run.steps[0]).toMatchObject({ id: "test", status: "failed" });
     expect(run.steps[1]).toMatchObject({ id: "review", status: "skipped", reason: "Previous step failed: test" });
     expect(await readFile(path.join(cwd, ".baton", "runs", runId, "test_result.md"), "utf8")).toContain("Summary: FAIL");
+  });
+
+  it("uses --fix with codex to run fixer once and retry a failed test", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-fix-codex-"));
+    await writeWorkflow(cwd, ["test", "review"]);
+    const errors: string[] = [];
+    const mock = createMockProcessRunner([
+      { stdout: "codex 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "", stderr: "", exitCode: 0, durationMs: 2 },
+      { stdout: "failing test", stderr: "assertion failed", exitCode: 1, durationMs: 5 },
+      { stdout: "fixed", stderr: "", exitCode: 0, durationMs: 6 },
+      { stdout: "tests passed", stderr: "", exitCode: 0, durationMs: 5 }
+    ]);
+
+    expect(
+      await runCli(["run", "Build", "--codex", "--test", "--test-command", "pnpm test", "--fix"], {
+        cwd,
+        runner: mock.runner,
+        stderr: (line) => errors.push(line)
+      })
+    ).toBe(0);
+
+    const runId = await onlyRunId(cwd);
+    const worktreePath = path.join(cwd, ".baton", "worktrees", runId);
+    const run = JSON.parse(await readFile(path.join(cwd, ".baton", "runs", runId, "run.json"), "utf8")) as Run;
+    const codexExecCalls = mock.calls.filter((call) => call.command === "codex" && call.args[0] === "exec");
+    const testCalls = mock.calls.filter((call) => call.command === "pnpm");
+
+    expect(run.status).toBe("completed");
+    expect(run.steps[0]).toMatchObject({ id: "test", status: "completed", attempts: 1 });
+    expect(codexExecCalls).toHaveLength(1);
+    expect(codexExecCalls[0]?.options?.cwd).toBe(worktreePath);
+    expect(codexExecCalls[0]?.options?.input).toContain("Fix attempt: 1 of 1");
+    expect(testCalls).toHaveLength(2);
+    expect(testCalls.map((call) => call.options?.cwd)).toEqual([worktreePath, worktreePath]);
+    expect(errors.join("\n")).not.toContain("--fix requested without --codex");
+  });
+
+  it("bounds --fix retries to --max-fix-attempts and warns when fixer is stubbed", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-fix-stub-"));
+    await writeWorkflow(cwd, ["test", "review"]);
+    const errors: string[] = [];
+    const mock = createMockProcessRunner([
+      { stdout: "", stderr: "", exitCode: 0, durationMs: 2 },
+      { stdout: "failing test", stderr: "assertion failed", exitCode: 1, durationMs: 5 },
+      { stdout: "still failing", stderr: "assertion failed", exitCode: 1, durationMs: 5 },
+      { stdout: "still failing", stderr: "assertion failed", exitCode: 1, durationMs: 5 }
+    ]);
+
+    expect(
+      await runCli(["run", "Build", "--test", "--test-command", "pnpm test", "--fix", "--max-fix-attempts", "2"], {
+        cwd,
+        runner: mock.runner,
+        stderr: (line) => errors.push(line)
+      })
+    ).toBe(1);
+
+    const runId = await onlyRunId(cwd);
+    const run = JSON.parse(await readFile(path.join(cwd, ".baton", "runs", runId, "run.json"), "utf8")) as Run;
+    const testCalls = mock.calls.filter((call) => call.command === "pnpm");
+
+    expect(run.status).toBe("failed");
+    expect(run.steps[0]).toMatchObject({ id: "test", status: "failed", attempts: 2 });
+    expect(run.steps[1]).toMatchObject({ id: "review", status: "skipped" });
+    expect(testCalls).toHaveLength(3);
+    expect(mock.calls.some((call) => call.command === "codex")).toBe(false);
+    expect(errors.join("\n")).toContain("--fix requested without --codex");
+  });
+
+  it("rejects invalid --max-fix-attempts values before creating a run", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-fix-invalid-"));
+    await writeWorkflow(cwd, ["test"]);
+    const errors: string[] = [];
+    const mock = createMockProcessRunner();
+
+    expect(
+      await runCli(["run", "Build", "--fix", "--max-fix-attempts", "0"], {
+        cwd,
+        runner: mock.runner,
+        stderr: (line) => errors.push(line)
+      })
+    ).toBe(1);
+
+    expect(errors.join("\n")).toContain("Usage:");
+    expect(errors.join("\n")).toContain("--max-fix-attempts <n>");
+    expect(mock.calls).toHaveLength(0);
+    await expect(readdir(path.join(cwd, ".baton", "runs"))).rejects.toThrow();
   });
 
   it("automatically exports an actual run journal with the selected worker registry", async () => {
@@ -975,6 +1064,44 @@ describe("@baton/cli", () => {
     expect(await readFile(path.join(cwd, ".baton", "runs", "run-1", "test_result.md"), "utf8")).toContain("Summary: PASS");
   });
 
+  it("supports resume with --fix and retries a failed persisted test step", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-fix-resume-"));
+    await writeWorkflow(cwd, ["test"]);
+    const artifactStore = new ArtifactStore({ workspaceRoot: cwd });
+    const runStore = new RunStore({ artifactStore, clock: fixedClock("2026-06-15T00:00:00.000Z") });
+    const worktreePath = path.join(cwd, ".baton", "worktrees", "run-1");
+    await artifactStore.writeArtifact("run-1", "request.md", "Build Baton\n");
+    await runStore.save({
+      id: "run-1",
+      request: "Build Baton",
+      workflowId: "default",
+      status: "running",
+      dryRun: false,
+      createdAt: "2026-06-15T00:00:00.000Z",
+      worktreePath,
+      baseBranch: "main",
+      steps: [{ id: "test", type: "test", status: "planned" }]
+    });
+    const errors: string[] = [];
+    const mock = createMockProcessRunner([
+      { stdout: "fail", stderr: "bad", exitCode: 1, durationMs: 3 },
+      { stdout: "ok", stderr: "", exitCode: 0, durationMs: 3 }
+    ]);
+
+    expect(
+      await runCli(["run", "resume", "run-1", "--test", "--test-command", "pnpm test", "--fix"], {
+        cwd,
+        runner: mock.runner,
+        stderr: (line) => errors.push(line)
+      })
+    ).toBe(0);
+
+    const run = JSON.parse(await readFile(path.join(cwd, ".baton", "runs", "run-1", "run.json"), "utf8")) as Run;
+    expect(mock.calls.filter((call) => call.command === "pnpm")).toHaveLength(2);
+    expect(run.steps[0]).toMatchObject({ id: "test", status: "completed", attempts: 1 });
+    expect(errors.join("\n")).toContain("--fix requested without --codex");
+  });
+
   it("supports approve with test opt-in after a gated implement step", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-test-approve-"));
     await writeWorkflow(cwd, ["implement", "test"]);
@@ -1007,6 +1134,48 @@ describe("@baton/cli", () => {
       options: { cwd: worktreePath }
     });
     expect(run.steps.map((step) => step.status)).toEqual(["completed", "completed"]);
+  });
+
+  it("supports approve with --fix and retries a failed test after the gate", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "baton-cli-fix-approve-"));
+    await writeWorkflow(cwd, ["implement", "test"]);
+    const artifactStore = new ArtifactStore({ workspaceRoot: cwd });
+    const runStore = new RunStore({ artifactStore, clock: fixedClock("2026-06-15T00:00:00.000Z") });
+    const worktreePath = path.join(cwd, ".baton", "worktrees", "run-1");
+    await artifactStore.writeArtifact("run-1", "request.md", "Build Baton\n");
+    await runStore.save({
+      id: "run-1",
+      request: "Build Baton",
+      workflowId: "default",
+      status: "awaiting-approval",
+      dryRun: false,
+      createdAt: "2026-06-15T00:00:00.000Z",
+      worktreePath,
+      baseBranch: "main",
+      steps: [
+        { id: "implement", type: "implement", status: "planned" },
+        { id: "test", type: "test", status: "planned" }
+      ]
+    });
+    const errors: string[] = [];
+    const mock = createMockProcessRunner([
+      { stdout: "fail", stderr: "bad", exitCode: 1, durationMs: 3 },
+      { stdout: "ok", stderr: "", exitCode: 0, durationMs: 3 }
+    ]);
+
+    expect(
+      await runCli(["run", "approve", "run-1", "--test", "--test-command", "pnpm test", "--fix"], {
+        cwd,
+        runner: mock.runner,
+        stderr: (line) => errors.push(line)
+      })
+    ).toBe(0);
+
+    const run = JSON.parse(await readFile(path.join(cwd, ".baton", "runs", "run-1", "run.json"), "utf8")) as Run;
+    expect(mock.calls.filter((call) => call.command === "pnpm")).toHaveLength(2);
+    expect(run.steps.map((step) => step.status)).toEqual(["completed", "completed"]);
+    expect(run.steps[1]).toMatchObject({ id: "test", attempts: 1 });
+    expect(errors.join("\n")).toContain("--fix requested without --codex");
   });
 
   it("cleans only terminal run worktrees and preserves run state", async () => {

@@ -74,7 +74,8 @@ describe("@baton/schemas", () => {
             startedAt: "2026-06-15T00:00:00.000Z",
             completedAt: "2026-06-15T00:00:01.000Z",
             reason: "done",
-            artifacts: ["/tmp/artifact.md"]
+            artifacts: ["/tmp/artifact.md"],
+            attempts: 1
           }
         ]
       }).success
@@ -83,6 +84,17 @@ describe("@baton/schemas", () => {
     expect(RunStatusSchema.options).toContain("awaiting-approval");
     expect(RunStepStatusSchema.safeParse("skipped").success).toBe(true);
     expect(RunStepStatusSchema.safeParse("cancelled").success).toBe(false);
+    expect(
+      RunSchema.safeParse({
+        id: "run-1",
+        request: "Build it",
+        workflowId: "default",
+        status: "running",
+        dryRun: true,
+        createdAt: "2026-06-15T00:00:00.000Z",
+        steps: [{ id: "test", type: "test", status: "running", attempts: 0 }]
+      }).success
+    ).toBe(false);
     expect(
       RunSchema.safeParse({
         id: "run-1",

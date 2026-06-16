@@ -1,0 +1,53 @@
+{
+  "version": "1",
+  "runId": "fix-loop-v0.9",
+  "buildsOn": "finalize-writer-v0.8",
+  "baseBranch": "origin/main",
+  "tasks": [
+    {
+      "id": "task-801",
+      "title": "Schema: RunStep.attempts (optional)",
+      "description": "packages/schemas/src/run.schema.ts: RunStep에 optional attempts?: number(양의 정수) 추가. additive(기존 run.json 하위호환). schemas.test.ts에 attempts 있는/없는 입력 parse 테스트.",
+      "targetFiles": ["packages/schemas/src/run.schema.ts", "packages/schemas/test/schemas.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01"],
+      "testCommands": ["corepack pnpm --filter @baton/schemas test"]
+    },
+    {
+      "id": "task-802",
+      "title": "FixPolicy + buildFixPrompt",
+      "description": "packages/core/src/policies/FixPolicy.ts: { maxAttempts(기본 1, 1 이상 정수, 상한 예 5로 클램프), fixableStepTypes(기본 ['test']), isFixable(stepType) }. packages/core/src/runs/buildFixPrompt.ts: 실패한 step과 그 출력(test_result.md/stderr 등) 컨텍스트를 담은 fixer 프롬프트. 단위 테스트(isFixable, maxAttempts 클램프/검증, 프롬프트 내용).",
+      "targetFiles": ["packages/core/src/policies/FixPolicy.ts", "packages/core/src/runs/buildFixPrompt.ts", "packages/core/src/index.ts", "packages/core/test/fixPolicy.test.ts"],
+      "dependencies": ["task-801"],
+      "acceptanceCriteria": ["AC-11"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-803",
+      "title": "RunExecutor bounded fix loop",
+      "description": "packages/core/src/runs/RunExecutor.ts: RunExecutorOptions에 fix 활성 옵션 + fixPolicy. executeFrom의 step 실패 분기 직전에 attemptFix 헬퍼 삽입: fixEnabled && policy.isFixable(stepType) && registry.resolve('fixer')!==undefined일 때만 while(attempts<maxAttempts){ attempts++; fixer 실행(invokeWorker, cwd=worktreePath, buildFixPrompt); 로그/이벤트(fix.attempt.started/finished); step 재실행(invokeWorker); RunStep.attempts 갱신 + 상태 + save; if(success) break }. 종료 후에도 실패면 기존 skipFromIndex+run failed. fixEnabled=false면 헬퍼 미진입(기존 경로 동일). throw 없음. 테스트: fix 비활성 회귀(fixer 0회), 1회 fix 통과(fixer1+재실행1, attempts=1, 계속), N회 소진(정확히 N회+failed+잔여 skipped), 처음 통과 미진입(fixer0), fixer 미등록 무해(상한내 종료), cwd 격리, 매 attempt 영속화, resume 멱등.",
+      "targetFiles": ["packages/core/src/runs/RunExecutor.ts", "packages/core/test/fixLoop.test.ts"],
+      "dependencies": ["task-802"],
+      "acceptanceCriteria": ["AC-02", "AC-03", "AC-04", "AC-05", "AC-06", "AC-07", "AC-08", "AC-09", "AC-10", "AC-15"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-804",
+      "title": "CLI --fix / --max-fix-attempts",
+      "description": "packages/cli/src/commands/run.ts: --fix 플래그(fix 활성), --max-fix-attempts <n>(검증: 정수 1 이상, 위반 시 사용법+비정상 종료). createExecutor에 fix 옵션/fixPolicy 전달. --codex/--claude/--test와 조합, resume/approve도 --fix 지원. --fix인데 fixer 미해결(=--codex 없음, fixer=Stub)이면 명확한 경고. --fix 미지정 시 회귀 없음. 테스트(조합/경고/검증/회귀).",
+      "targetFiles": ["packages/cli/src/commands/run.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-803"],
+      "acceptanceCriteria": ["AC-11", "AC-12", "AC-13"],
+      "testCommands": ["corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-805",
+      "title": "README + security + gates",
+      "description": "packages/cli/src/main.ts help 갱신. README.md에 --fix/--max-fix-attempts/bounded 동작/안전(상한·격리·opt-in) 문서화. 보안 회귀 테스트: credential/세션 토큰/danger 매치 0, fixer/재실행 cwd가 base/main 아님 단언. 전체 게이트(v0.1~v0.9 회귀 없음) + run --help 스모크, 자체 diff 리뷰, 최종 요약.",
+      "targetFiles": ["packages/cli/src/main.ts", "README.md", "packages/core/test/security.test.ts"],
+      "dependencies": ["task-804"],
+      "acceptanceCriteria": ["AC-14", "AC-16"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build", "node packages/cli/dist/main.js run --help"]
+    }
+  ]
+}
