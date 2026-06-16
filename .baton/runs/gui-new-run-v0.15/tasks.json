@@ -1,0 +1,73 @@
+{
+  "version": "1",
+  "runId": "gui-new-run-v0.15",
+  "buildsOn": "macos-gui-v0.14",
+  "baseBranch": "origin/main",
+  "language": "swift",
+  "gates": ["swift build", "swift test", "pnpm typecheck", "pnpm test", "pnpm build"],
+  "tasks": [
+    {
+      "id": "task-N01",
+      "title": "NewRunFormModel (form -> StartRunOptions)",
+      "description": "apps/macos/Baton/Sources/BatonKit/Forms/NewRunFormModel.swift: 관찰 모델(또는 값 타입). 필드: request, dryRun, useCodex/useClaude/useTest(Bool?/tri), testCommand(String?), fixEnabled(Bool?), maxFixAttempts(Int?). buildOptions() -> StartRunOptions(미설정 토글 nil, 설정값 반영). isValid(request trim non-empty). Tests/NewRunFormModelTests: 기본/각 토글/값 매핑, isValid 빈/공백/정상, maxFixAttempts 빈값 nil. Swift 6 concurrency 준수.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonKit/Forms/NewRunFormModel.swift", "apps/macos/Baton/Tests/BatonKitTests/NewRunFormModelTests.swift"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02", "AC-03", "AC-04"],
+      "testCommands": ["swift test"]
+    },
+    {
+      "id": "task-N02",
+      "title": "startRun argv coverage",
+      "description": "BatonClient.startRun argv가 모든 StartRunOptions를 반영하는지 테스트 보강(BatonClientTests): --codex/--no-codex, --claude/--no-claude, --test/--no-test, --test-command <c>, --fix/--no-fix, --max-fix-attempts <n>, --dry-run, --workflow <id>/--project <id>. 모두 배열 인자(셸 결합 없음). 필요 시 appendWorkerOptions 정리(동작 동일).",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonKit/Client/BatonClient.swift", "apps/macos/Baton/Tests/BatonKitTests/BatonClientTests.swift"],
+      "dependencies": ["task-N01"],
+      "acceptanceCriteria": ["AC-07"],
+      "testCommands": ["swift test"]
+    },
+    {
+      "id": "task-N03",
+      "title": "RunsStore.startRun orchestration",
+      "description": "RunsStore.swift: startRun(request:options:) async — client.startRun(request,options) 호출 후 load()/refresh로 목록 즉시 갱신. 실패(에러)는 throw 또는 상태로 표면화(크래시 없음). Tests/RunsStoreStartRunTests(주입형 fake client): startRun 인자 전달, 성공 후 refresh 호출 순서, 실패 전파 단언.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonKit/Store/RunsStore.swift", "apps/macos/Baton/Tests/BatonKitTests/RunsStoreStartRunTests.swift"],
+      "dependencies": ["task-N02"],
+      "acceptanceCriteria": ["AC-05", "AC-06"],
+      "testCommands": ["swift test"]
+    },
+    {
+      "id": "task-N04",
+      "title": "BatonLocation (executable path)",
+      "description": "apps/macos/Baton/Sources/BatonKit/Settings/BatonLocation.swift: resolve(preference: String?) -> String (preference trim non-empty면 그 경로, 아니면 기본 'baton'). ProcessRunner/BatonClient가 해석된 경로를 executable로 사용하도록 주입. baton 미발견 시 기존 명확한 에러. Tests/BatonLocationTests: preference 있음/없음/공백 → 해석.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonKit/Settings/BatonLocation.swift", "apps/macos/Baton/Tests/BatonKitTests/BatonLocationTests.swift"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-08", "AC-09"],
+      "testCommands": ["swift test"]
+    },
+    {
+      "id": "task-N05",
+      "title": "BatonTheme design system + status/role mappings (한국어)",
+      "description": "ux-direction.md 기준 디자인 시스템. Sources/BatonKit/Theme/StatusDisplay.swift + RoleDisplay.swift(순수): koreanLabel(status)->'실행 중/승인 대기/완료/실패/취소됨/건너뜀/대기', tint(status)->상태색 토큰, RoleDisplay.koreanLabel(role)->'분석/설계/구현/테스트/리뷰/수정/릴리스'. Sources/BatonApp/Theme/BatonTheme.swift: 다크 색(#141414 bg, 크림 #F2EAD8 텍스트, 뮤트 #9A968C), 타이포(헤비 산세리프 헤드라인), 간격, 상태 그라데이션. 재사용 컴포넌트 StatusPill/RoleBadge/RunCard/GradientButton(캡슐+그라데이션). 앱 .preferredColorScheme(.dark). Tests/StatusDisplayTests: 상태/역할 → 한국어 라벨·색 매핑 단위 테스트.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonKit/Theme/StatusDisplay.swift", "apps/macos/Baton/Sources/BatonKit/Theme/RoleDisplay.swift", "apps/macos/Baton/Sources/BatonApp/Theme/BatonTheme.swift", "apps/macos/Baton/Sources/BatonApp/Components/StatusPill.swift", "apps/macos/Baton/Tests/BatonKitTests/StatusDisplayTests.swift"],
+      "dependencies": ["task-N01"],
+      "acceptanceCriteria": ["AC-17", "AC-18", "AC-21"],
+      "testCommands": ["swift test"]
+    },
+    {
+      "id": "task-N06",
+      "title": "Restyle RunsList(대시보드) + RunDetail(티켓), 한국어",
+      "description": "ux-direction.md대로 리스타일. RunsListView: 사이드바 필터(전체/실행 중/승인 대기/완료 + 카운트) + 팀(역할) 배지 + run 카드(요청 요약, StatusPill, 단계 N/M 진행, 워크플로우). 승인 대기 카드는 앰버 강조 + 인라인 승인/거부. 상단 '새 실행' GradientButton. RunDetailView: 단계 타임라인(StatusPill+RoleBadge+타이밍/이유), 승인, 산출물 목록(final_summary.md 등 파일명 영문), 액션(승인/거부/재개/정리). 한국어 카피. View 얇게(BatonKit/Theme 의존). swift build 컴파일.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonApp/RunsListView.swift", "apps/macos/Baton/Sources/BatonApp/RunDetailView.swift", "apps/macos/Baton/Sources/BatonApp/Components/RunCard.swift"],
+      "dependencies": ["task-N05"],
+      "acceptanceCriteria": ["AC-19", "AC-20", "AC-21"],
+      "testCommands": ["swift build"]
+    },
+    {
+      "id": "task-N07",
+      "title": "NewRun/Settings 시트(한국어) + UX 문서 + gates",
+      "description": "Sources/BatonApp/NewRunView.swift: 요청('요청' TextField) + 워커 토글(구현=Codex/분석·설계·리뷰=Claude/테스트/자동 수정), 고급(테스트 명령/최대 수정 횟수/계획만) + '시작'(빈 요청 비활성) → RunsStore.startRun. SettingsView.swift: baton 경로('설정'). 앱 진입에 '새 실행'/'설정'. 모두 BatonTheme/한국어. apps/macos/UX.md: 디자인 언어(다크/크림/캡슐/한국어 용어집) 기록. apps/macos/README.md: 새 실행/경로/수동 QA 체크리스트(한국어 라벨 확인 포함) 갱신. swift build/swift test 통과 + 루트 TS 게이트 회귀 0. 자체 diff 리뷰, 최종 요약(UI 수동 QA 명시).",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonApp/NewRunView.swift", "apps/macos/Baton/Sources/BatonApp/SettingsView.swift", "apps/macos/Baton/Sources/BatonApp/BatonApp.swift", "apps/macos/UX.md", "apps/macos/README.md"],
+      "dependencies": ["task-N03", "task-N04", "task-N06"],
+      "acceptanceCriteria": ["AC-10", "AC-11", "AC-12", "AC-13", "AC-14", "AC-15", "AC-16", "AC-22"],
+      "testCommands": ["swift build", "swift test", "corepack pnpm test"]
+    }
+  ]
+}

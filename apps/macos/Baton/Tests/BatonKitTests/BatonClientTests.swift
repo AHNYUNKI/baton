@@ -75,6 +75,46 @@ final class BatonClientTests: XCTestCase {
         ])
     }
 
+    func testStartRunBuildsAllWorkerOptionVariantsAsArrayArguments() async throws {
+        let runner = FakeCommandRunner(results: [.success(.ok)])
+        let client = BatonClient(runner: runner)
+
+        try await client.startRun(
+            request: "Build Baton",
+            options: StartRunOptions(
+                dryRun: true,
+                workflowId: "workflow-a",
+                projectId: "project-a",
+                useCodex: false,
+                useClaude: true,
+                useTest: false,
+                testCommand: "pnpm test -- --runInBand",
+                fixEnabled: true,
+                maxFixAttempts: 4
+            )
+        )
+
+        XCTAssertEqual(runner.runCalls(), [
+            [
+                "run",
+                "Build Baton",
+                "--dry-run",
+                "--no-codex",
+                "--claude",
+                "--no-test",
+                "--test-command",
+                "pnpm test -- --runInBand",
+                "--fix",
+                "--max-fix-attempts",
+                "4",
+                "--workflow",
+                "workflow-a",
+                "--project",
+                "project-a"
+            ]
+        ])
+    }
+
     func testCommandFailuresAreClearErrors() async throws {
         let runner = FakeCommandRunner(results: [
             .success(CommandResult(stdout: "", stderr: "boom", exitCode: 2, durationMs: 1)),

@@ -79,6 +79,21 @@ public struct ResumeRunOptions: Equatable, Sendable {
     }
 }
 
+public protocol BatonClientProtocol: Sendable {
+    func listRuns() async throws -> RunList
+    func runDetail(id: String) async throws -> RunDetail
+    func state() async throws -> StateSnapshot
+    @discardableResult
+    func startRun(request: String, options: StartRunOptions) async throws -> CommandResult
+    @discardableResult
+    func approve(runId: String, reject: Bool, note: String?, options: ResumeRunOptions) async throws -> CommandResult
+    @discardableResult
+    func resume(runId: String, options: ResumeRunOptions) async throws -> CommandResult
+    @discardableResult
+    func clean(runId: String) async throws -> CommandResult
+    func watch(intervalSeconds: TimeInterval?, once: Bool) -> AsyncThrowingStream<WatchEvent, Error>
+}
+
 public struct BatonClient: Sendable {
     private let runner: any CommandRunner
 
@@ -263,6 +278,8 @@ public struct BatonClient: Sendable {
         return String(interval)
     }
 }
+
+extension BatonClient: BatonClientProtocol {}
 
 private func mapRunnerError(_ error: Error) -> Error {
     if case let CommandRunnerError.executableNotFound(executable) = error {
