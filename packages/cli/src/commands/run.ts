@@ -949,8 +949,9 @@ function warnRegistry(context: CommandContext, selection: WorkerSelection): void
     claudeRoles.length === 0 ? undefined : `ClaudeCodeAdapter for ${claudeRoles.join(", ")}`,
     testerRoles.length === 0 ? undefined : `TestRunnerAdapter for ${testerRoles.join(", ")}`
   ].filter((message): message is string => message !== undefined);
-  const stubMessage = `StubWorker for ${stubRoles.join(", ")}`;
-  context.stderr(actuals.length === 0 ? `Warning: using ${stubMessage}.` : `Warning: using ${actuals.join("; ")}; ${stubMessage}.`);
+  const stubMessage = stubRoles.length === 0 ? undefined : `StubWorker for ${stubRoles.join(", ")}`;
+  const messages = [...actuals, ...(stubMessage === undefined ? [] : [stubMessage])];
+  context.stderr(`Warning: using ${messages.join("; ")}.`);
 }
 
 async function preflightCodex(context: CommandContext): Promise<CommandResult> {
