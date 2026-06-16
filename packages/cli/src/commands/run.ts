@@ -1,5 +1,5 @@
 import type { Dirent } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -11,6 +11,7 @@ import {
   RunStore,
   listRuns,
   summarizeRuns,
+  workspaceDir,
   loadWorkflows
 } from "@baton/core";
 import { RunStatusSchema, type Run, type RunStatus, type Workflow } from "@baton/schemas";
@@ -19,7 +20,7 @@ import type { CommandContext, CommandResult } from "./context.js";
 import { checkClaude, checkCodex } from "./doctor.js";
 import { maybeExportJournal, type JournalWorkers } from "./journal.js";
 import { createDefaultWorkerRegistry, createWorkerRegistry } from "../registry.js";
-import type { WorkerRegistryResult } from "../registry.js";
+import type { WorkerCommand, WorkerRegistryResult } from "../registry.js";
 
 export async function runCommand(args: readonly string[], context: CommandContext): Promise<CommandResult> {
   if (args.length === 0) {
@@ -93,8 +94,9 @@ async function executeCommand(args: readonly string[], context: CommandContext):
     }
   }
 
-  const { executor, workers } = createExecutor(context, artifactStore, runService, workflows, { useCodex: parsed.useCodex, useClaude: parsed.useClaude });
-  warnRegistry(context, parsed.useCodex, parsed.useClaude);
+  const workerSelection = await resolveWorkerSelection(context, parsed);
+  const { executor, workers } = createExecutor(context, artifactStore, runService, workflows, workerSelection);
+  warnRegistry(context, workerSelection);
   const result = await executor.start(parsed.request, {
     ...(parsed.workflowId === undefined ? {} : { workflowId: parsed.workflowId }),
     ...(parsed.projectId === undefined ? {} : { projectId: parsed.projectId })
@@ -198,8 +200,9 @@ async function resumeCommand(args: readonly string[], context: CommandContext): 
     }
   }
 
-  const { artifactStore, executor, workflows, workers } = await createExecutorFromContext(context, { useCodex: parsed.useCodex, useClaude: parsed.useClaude });
-  warnRegistry(context, parsed.useCodex, parsed.useClaude);
+  const workerSelection = await resolveWorkerSelection(context, parsed);
+  const { artifactStore, executor, workflows, workers } = await createExecutorFromContext(context, workerSelection);
+  warnRegistry(context, workerSelection);
   const result = await executor.resume(parsed.runId);
 
   printRun(context, result.run);
@@ -233,7 +236,8 @@ async function approveCommand(args: readonly string[], context: CommandContext):
     }
   }
 
-  const { artifactStore, executor, workflows, workers } = await createExecutorFromContext(context, { useCodex: parsed.useCodex, useClaude: parsed.useClaude });
+  const workerSelection = await resolveWorkerSelection(context, parsed);
+  const { artifactStore, executor, workflows, workers } = await createExecutorFromContext(context, workerSelection);
   const decided = await executor.decide(parsed.runId, {
     decision: parsed.reject ? "rejected" : "approved",
     ...(parsed.note === undefined ? {} : { note: parsed.note })
@@ -246,7 +250,7 @@ async function approveCommand(args: readonly string[], context: CommandContext):
     return 0;
   }
 
-  warnRegistry(context, parsed.useCodex, parsed.useClaude);
+  warnRegistry(context, workerSelection);
   const result = await executor.resume(parsed.runId);
   printRun(context, result.run);
   printSteps(context, result.run);
@@ -307,6 +311,8 @@ type ParsedExecuteArgs = {
   dryRun: boolean;
   useCodex: boolean;
   useClaude: boolean;
+  useTest: boolean;
+  testCommandFlag?: string;
   workflowId?: string;
   projectId?: string;
 };
@@ -381,6 +387,8 @@ function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefine
   let dryRun = false;
   let useCodex = false;
   let useClaude = false;
+  let useTest = false;
+  let testCommandFlag: string | undefined;
   let workflowId: string | undefined;
   let projectId: string | undefined;
 
@@ -399,6 +407,21 @@ function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefine
 
     if (arg === "--claude") {
       useClaude = true;
+      continue;
+    }
+
+    if (arg === "--test") {
+      useTest = true;
+      continue;
+    }
+
+    if (arg === "--test-command") {
+      const value = args[index + 1];
+      if (value === undefined || value.length === 0) {
+        return undefined;
+      }
+      testCommandFlag = value;
+      index += 1;
       continue;
     }
 
@@ -424,20 +447,20 @@ function parseExecuteArgs(args: readonly string[]): ParsedExecuteArgs | undefine
   }
 
   const request = requestParts.join(" ").trim();
-  if (request.length === 0 || workflowId === "" || projectId === "") {
+  if (request.length === 0 || workflowId === "" || projectId === "" || (testCommandFlag !== undefined && !useTest)) {
     return undefined;
   }
 
-  return workflowId === undefined && projectId === undefined
-    ? { request, dryRun, useCodex, useClaude }
-    : {
-        request,
-        dryRun,
-        useCodex,
-        useClaude,
-        ...(workflowId === undefined ? {} : { workflowId }),
-        ...(projectId === undefined ? {} : { projectId })
-      };
+  return {
+    request,
+    dryRun,
+    useCodex,
+    useClaude,
+    useTest,
+    ...(testCommandFlag === undefined ? {} : { testCommandFlag }),
+    ...(workflowId === undefined ? {} : { workflowId }),
+    ...(projectId === undefined ? {} : { projectId })
+  };
 }
 
 type ParsedApproveArgs = {
@@ -445,6 +468,8 @@ type ParsedApproveArgs = {
   reject: boolean;
   useCodex: boolean;
   useClaude: boolean;
+  useTest: boolean;
+  testCommandFlag?: string;
   note?: string;
 };
 
@@ -452,6 +477,8 @@ function parseApproveArgs(args: readonly string[]): ParsedApproveArgs | undefine
   let reject = false;
   let useCodex = false;
   let useClaude = false;
+  let useTest = false;
+  let testCommandFlag: string | undefined;
   let note: string | undefined;
   const positional: string[] = [];
 
@@ -473,6 +500,21 @@ function parseApproveArgs(args: readonly string[]): ParsedApproveArgs | undefine
       continue;
     }
 
+    if (arg === "--test") {
+      useTest = true;
+      continue;
+    }
+
+    if (arg === "--test-command") {
+      const value = args[index + 1];
+      if (value === undefined || value.length === 0) {
+        return undefined;
+      }
+      testCommandFlag = value;
+      index += 1;
+      continue;
+    }
+
     if (arg === "--note") {
       note = args[index + 1];
       index += 1;
@@ -488,27 +530,39 @@ function parseApproveArgs(args: readonly string[]): ParsedApproveArgs | undefine
     }
   }
 
-  if (positional.length !== 1 || positional[0] === undefined || note === "") {
+  if (positional.length !== 1 || positional[0] === undefined || note === "" || (testCommandFlag !== undefined && !useTest)) {
     return undefined;
   }
 
-  return note === undefined
-    ? { runId: positional[0], reject, useCodex, useClaude }
-    : { runId: positional[0], reject, useCodex, useClaude, note };
+  return {
+    runId: positional[0],
+    reject,
+    useCodex,
+    useClaude,
+    useTest,
+    ...(testCommandFlag === undefined ? {} : { testCommandFlag }),
+    ...(note === undefined ? {} : { note })
+  };
 }
 
 type ParsedRunIdWithWorkers = {
   runId: string;
   useCodex: boolean;
   useClaude: boolean;
+  useTest: boolean;
+  testCommandFlag?: string;
 };
 
 function parseRunIdWithWorkers(args: readonly string[]): ParsedRunIdWithWorkers | undefined {
   let useCodex = false;
   let useClaude = false;
+  let useTest = false;
+  let testCommandFlag: string | undefined;
   const positional: string[] = [];
 
-  for (const arg of args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
     if (arg === "--codex") {
       useCodex = true;
       continue;
@@ -519,32 +573,134 @@ function parseRunIdWithWorkers(args: readonly string[]): ParsedRunIdWithWorkers 
       continue;
     }
 
-    if (arg.startsWith("--")) {
+    if (arg === "--test") {
+      useTest = true;
+      continue;
+    }
+
+    if (arg === "--test-command") {
+      const value = args[index + 1];
+      if (value === undefined || value.length === 0) {
+        return undefined;
+      }
+      testCommandFlag = value;
+      index += 1;
+      continue;
+    }
+
+    if (arg?.startsWith("--") === true) {
       return undefined;
     }
 
-    positional.push(arg);
+    if (arg !== undefined) {
+      positional.push(arg);
+    }
   }
 
-  if (positional.length !== 1 || positional[0] === undefined) {
+  if (positional.length !== 1 || positional[0] === undefined || (testCommandFlag !== undefined && !useTest)) {
     return undefined;
   }
 
   return {
     runId: positional[0],
     useCodex,
-    useClaude
+    useClaude,
+    useTest,
+    ...(testCommandFlag === undefined ? {} : { testCommandFlag })
   };
 }
 
 type WorkerSelection = {
   useCodex: boolean;
   useClaude: boolean;
+  useTest: boolean;
+  testCommand?: WorkerCommand;
 };
+
+type WorkerSelectionFlags = {
+  useCodex: boolean;
+  useClaude: boolean;
+  useTest: boolean;
+  testCommandFlag?: string;
+};
+
+export type ResolveTestCommandOptions = {
+  config?: unknown;
+  flag?: string;
+};
+
+export function resolveTestCommand(options: ResolveTestCommandOptions): WorkerCommand | undefined {
+  if (options.flag !== undefined) {
+    return parseFlagTestCommand(options.flag);
+  }
+
+  return parseConfigTestCommand(options.config);
+}
+
+async function resolveWorkerSelection(context: CommandContext, flags: WorkerSelectionFlags): Promise<WorkerSelection> {
+  const config = flags.useTest ? await loadRunConfig(context.cwd) : undefined;
+  const testCommand = flags.useTest
+    ? resolveTestCommand({
+        ...(config === undefined ? {} : { config }),
+        ...(flags.testCommandFlag === undefined ? {} : { flag: flags.testCommandFlag })
+      })
+    : undefined;
+
+  return {
+    useCodex: flags.useCodex,
+    useClaude: flags.useClaude,
+    useTest: flags.useTest,
+    ...(testCommand === undefined ? {} : { testCommand })
+  };
+}
+
+async function loadRunConfig(cwd: string): Promise<unknown | undefined> {
+  const configPath = path.join(workspaceDir(cwd), "config.json");
+
+  try {
+    return JSON.parse(await readFile(configPath, "utf8")) as unknown;
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return undefined;
+    }
+    if (error instanceof SyntaxError) {
+      throw new Error(`Invalid Baton config: ${configPath}`);
+    }
+    throw error;
+  }
+}
+
+function parseFlagTestCommand(flag: string): WorkerCommand | undefined {
+  const tokens = flag.trim().split(/\s+/u).filter((token) => token.length > 0);
+  const command = tokens[0];
+  if (command === undefined) {
+    return undefined;
+  }
+
+  return { command, args: tokens.slice(1) };
+}
+
+function parseConfigTestCommand(config: unknown): WorkerCommand | undefined {
+  if (!isRecord(config) || !isRecord(config.test)) {
+    return undefined;
+  }
+
+  const commandParts = config.test.command;
+  if (!Array.isArray(commandParts) || !commandParts.every((part): part is string => typeof part === "string")) {
+    return undefined;
+  }
+
+  const command = commandParts[0];
+  if (command === undefined || command.length === 0) {
+    return undefined;
+  }
+
+  return { command, args: commandParts.slice(1) };
+}
 
 async function createExecutorFromContext(
   context: CommandContext,
-  options: WorkerSelection = { useCodex: false, useClaude: false }
+  options: WorkerSelection = { useCodex: false, useClaude: false, useTest: false }
 ): Promise<{ artifactStore: ArtifactStore; executor: RunExecutor; workflows: Workflow[]; workers: JournalWorkers }> {
   const workflows = await loadWorkflows({ cwd: context.cwd });
   const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
@@ -563,11 +719,17 @@ function createExecutor(
   artifactStore: ArtifactStore,
   runService: RunService,
   workflows: Workflow[],
-  options: WorkerSelection = { useCodex: false, useClaude: false }
+  options: WorkerSelection = { useCodex: false, useClaude: false, useTest: false }
 ): { executor: RunExecutor; workers: JournalWorkers } {
   const registryResult =
-    options.useCodex || options.useClaude
-      ? createWorkerRegistry({ codex: options.useCodex, claude: options.useClaude, runner: context.runner })
+    options.useCodex || options.useClaude || options.useTest
+      ? createWorkerRegistry({
+          codex: options.useCodex,
+          claude: options.useClaude,
+          test: options.useTest,
+          ...(options.testCommand === undefined ? {} : { testCommand: options.testCommand }),
+          runner: context.runner
+        })
       : createDefaultWorkerRegistry();
   return {
     executor: new RunExecutor({
@@ -766,18 +928,29 @@ function warnStub(context: CommandContext): void {
   context.stderr(`Warning: using StubWorker for ${stubRoles.join(", ")}.`);
 }
 
-function warnRegistry(context: CommandContext, useCodex: boolean, useClaude: boolean): void {
-  if (!useCodex && !useClaude) {
+function warnRegistry(context: CommandContext, selection: WorkerSelection): void {
+  if (selection.useTest && selection.testCommand === undefined) {
+    context.stderr("Warning: --test requested but no test command was configured; using StubWorker for tester.");
+  }
+
+  if (!selection.useCodex && !selection.useClaude && !selection.useTest) {
     warnStub(context);
     return;
   }
 
-  const { codexRoles, claudeRoles, stubRoles } = createWorkerRegistry({ codex: useCodex, claude: useClaude });
+  const { codexRoles, claudeRoles, testerRoles, stubRoles } = createWorkerRegistry({
+    codex: selection.useCodex,
+    claude: selection.useClaude,
+    test: selection.useTest,
+    ...(selection.testCommand === undefined ? {} : { testCommand: selection.testCommand })
+  });
   const actuals = [
     codexRoles.length === 0 ? undefined : `CodexExecAdapter for ${codexRoles.join(", ")}`,
-    claudeRoles.length === 0 ? undefined : `ClaudeCodeAdapter for ${claudeRoles.join(", ")}`
+    claudeRoles.length === 0 ? undefined : `ClaudeCodeAdapter for ${claudeRoles.join(", ")}`,
+    testerRoles.length === 0 ? undefined : `TestRunnerAdapter for ${testerRoles.join(", ")}`
   ].filter((message): message is string => message !== undefined);
-  context.stderr(`Warning: using ${actuals.join("; ")}; StubWorker for ${stubRoles.join(", ")}.`);
+  const stubMessage = `StubWorker for ${stubRoles.join(", ")}`;
+  context.stderr(actuals.length === 0 ? `Warning: using ${stubMessage}.` : `Warning: using ${actuals.join("; ")}; ${stubMessage}.`);
 }
 
 async function preflightCodex(context: CommandContext): Promise<CommandResult> {
@@ -824,15 +997,19 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function runUsage(): string {
   return [
     "Usage:",
-    "  baton run <request> [--dry-run] [--codex] [--claude] [--workflow <id>] [--project <id>]",
+    "  baton run <request> [--dry-run] [--codex] [--claude] [--test] [--test-command <command>] [--workflow <id>] [--project <id>]",
     "  baton run list [--status <status>] [--limit <n>] [--json]",
     "  baton run show <runId>",
     "  baton run status <runId>",
-    "  baton run resume <runId> [--codex] [--claude]",
-    "  baton run approve <runId> [--codex] [--claude] [--reject] [--note <text>]",
+    "  baton run resume <runId> [--codex] [--claude] [--test] [--test-command <command>]",
+    "  baton run approve <runId> [--codex] [--claude] [--test] [--test-command <command>] [--reject] [--note <text>]",
     "  baton run clean <runId>"
   ].join("\n");
 }
