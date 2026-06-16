@@ -12,6 +12,8 @@ and opt-in Codex/Claude/Test Runner execution for role-specific workers.
   and finalize artifacts.
 - [Architecture](docs/ARCHITECTURE.md): workflow pipeline, role-to-worker
   mapping, artifacts, worktree isolation, and safety model.
+- [Integration contract](docs/INTEGRATION.md): versioned JSON envelopes,
+  `baton state`, and `baton watch` NDJSON for read-only GUI integrations.
 
 ## Quick Start
 
@@ -65,8 +67,10 @@ baton run "<request>" --dry-run
 baton run list
 baton run list --status completed --limit 10
 baton run list --json
-baton run show <runId>
-baton run status <runId>
+baton run show <runId> --json
+baton run status <runId> --json
+baton state --json
+baton watch --once
 baton run resume <runId> [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--fix|--no-fix]
 baton run approve <runId> [--codex|--no-codex] [--claude|--no-claude] [--test|--no-test] [--fix|--no-fix] [--reject]
 baton run clean <runId>

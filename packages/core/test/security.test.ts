@@ -16,7 +16,11 @@ describe("security regressions", () => {
       new RegExp(`(^|[/\\\\])${escapeRegExp(".codex")}([/\\\\]|$)`, "u"),
       new RegExp(`creden${"tial"}`, "iu"),
       new RegExp(`danger-${"full"}-${"access"}`, "u"),
-      new RegExp(`${escapeRegExp([".clau", "de"].join(""))}.*${["to", "ken"].join("")}`, "iu")
+      new RegExp(`${escapeRegExp([".clau", "de"].join(""))}.*${["to", "ken"].join("")}`, "iu"),
+      new RegExp(`${["create", "Server"].join("")}\\s*\\(`, "u"),
+      new RegExp(`[.]${["lis", "ten"].join("")}\\s*\\(`, "u"),
+      new RegExp(`node:${["h", "ttp"].join("")}`, "u"),
+      new RegExp(`node:${["n", "et"].join("")}`, "u")
     ];
 
     for (const pattern of blockedPatterns) {
