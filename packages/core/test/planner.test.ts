@@ -35,6 +35,8 @@ describe("TeamPlan planner", () => {
     expect(prompt).toContain("Add team planning.");
     expect(prompt).toContain("- codex");
     expect(prompt).toContain("assignedAgentId");
+    expect(prompt).toContain("한국어");
+    expect(prompt).toContain("analysis-design");
     expect(prompt).toContain("Return only one strict JSON object");
   });
 

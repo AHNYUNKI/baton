@@ -68,6 +68,9 @@ export function buildPlanPrompt(input: BuildPlanPromptInput): string {
     "Rules:",
     "- roles must be a non-empty array.",
     "- role ids must be stable, lowercase, and unique within the plan.",
+    "- Write role name, description, and instructions in Korean (한국어).",
+    "- role ids must remain short English slugs, for example analysis-design.",
+    "- assignedAgentId values must be copied exactly from the available values.",
     "- assignedAgentId must be one of the available values.",
     "- Do not include markdown, prose, comments, or trailing commas."
   ].join("\n");

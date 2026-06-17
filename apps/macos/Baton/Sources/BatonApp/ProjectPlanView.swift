@@ -243,7 +243,7 @@ struct ProjectPlanView: View {
         errorMessage = nil
         statusMessage = nil
 
-        Task {
+        Task { @MainActor in
             do {
                 let plan = try await client.generateTeamPlan(projectId: project.id, overview: trimmed)
                 editModel = TeamPlanEditModel(agentIds: project.agentIds, plan: plan)
@@ -265,7 +265,7 @@ struct ProjectPlanView: View {
         errorMessage = nil
         statusMessage = nil
 
-        Task {
+        Task { @MainActor in
             do {
                 let plan = try editModel.toTeamPlan()
                 let saved = try await client.setTeamPlan(projectId: project.id, plan: plan)
