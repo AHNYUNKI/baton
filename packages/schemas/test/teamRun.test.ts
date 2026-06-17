@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { TeamRunSchema, type TeamRun } from "../src/index.js";
+import { TeamRunRoleUsageSchema, TeamRunSchema, type TeamRun } from "../src/index.js";
 
 function teamRunFixture(overrides: Partial<TeamRun> = {}): TeamRun {
   return {
@@ -52,6 +52,11 @@ describe("TeamRun schema", () => {
           completedAt: "2026-06-17T00:00:20.000Z",
           reason: "Completed by stub worker.",
           summary: "Design summary.",
+          usage: {
+            inputTokens: 12,
+            outputTokens: 4,
+            estimated: true
+          },
           artifacts: ["/tmp/baton-worktree/logs/architect.stdout.log"]
         }
       ]
@@ -69,5 +74,33 @@ describe("TeamRun schema", () => {
         roles: [{ roleId: "architect", name: "Architect", assignedAgentId: "claude", status: "waiting" }]
       }).success
     ).toBe(false);
+  });
+
+  it("accepts optional role usage and rejects invalid token counts", () => {
+    expect(TeamRunRoleUsageSchema.parse({ inputTokens: 0, outputTokens: 1, estimated: false })).toEqual({
+      inputTokens: 0,
+      outputTokens: 1,
+      estimated: false
+    });
+    expect(TeamRunRoleUsageSchema.safeParse({ inputTokens: -1, outputTokens: 1, estimated: true }).success).toBe(false);
+    expect(TeamRunRoleUsageSchema.safeParse({ inputTokens: 1.5, outputTokens: 1, estimated: true }).success).toBe(false);
+
+    const teamRun = teamRunFixture({
+      roles: [
+        {
+          roleId: "architect",
+          name: "Architect",
+          assignedAgentId: "claude",
+          status: "completed",
+          usage: {
+            inputTokens: 9,
+            outputTokens: 3,
+            estimated: false
+          }
+        }
+      ]
+    });
+
+    expect(TeamRunSchema.parse(teamRun)).toEqual(teamRun);
   });
 });

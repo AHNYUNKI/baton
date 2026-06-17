@@ -465,12 +465,29 @@ describe("@baton/cli", () => {
     expect(approved.status).toBe("completed");
     expect(approved.roles.map((role) => role.status)).toEqual(["completed", "completed"]);
     expect(approved.roles.every((role) => role.reason === "Completed by stub worker.")).toBe(true);
+    expect(approved.roles.every((role) => role.usage !== undefined && role.usage.estimated)).toBe(true);
     expect(mock.calls.some((call) => call.command === "codex")).toBe(false);
     expect(mock.calls.some((call) => call.command === "claude")).toBe(false);
+    const approvedUsage = usageTotals(approved);
 
     output.length = 0;
     expect(await runCli(["project", "plan", "run", "show", started.id, "--json"], { cwd: localDir, env, stdout: (line) => output.push(line) })).toBe(0);
-    expect(TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data.status).toBe("completed");
+    const shown = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
+    expect(shown.status).toBe("completed");
+    expect(shown.roles.map((role) => role.usage)).toEqual(approved.roles.map((role) => role.usage));
+
+    output.length = 0;
+    expect(await runCli(["project", "plan", "run", "show", started.id], { cwd: localDir, env, stdout: (line) => output.push(line) })).toBe(0);
+    const showText = output.join("\n");
+    expect(showText).toContain("토큰 사용량(추정/실측)");
+    expect(showText).toContain("플랫폼\t입력\t출력\t합계\t역할수");
+    expect(showText).toContain(
+      `codex\t${approvedUsage.inputTokens}\t${approvedUsage.outputTokens}\t${approvedUsage.totalTokens}\t${approvedUsage.roles}`
+    );
+    expect(showText).toContain(
+      `총합\t${approvedUsage.inputTokens}\t${approvedUsage.outputTokens}\t${approvedUsage.totalTokens}\t${approvedUsage.roles}`
+    );
+    expect(showText).toContain("※ 추정치 포함(실측 디스패치 시 정확)");
 
     output.length = 0;
     expect(await runCli(["project", "plan", "run", "list", projectId, "--json"], { cwd: localDir, env, stdout: (line) => output.push(line) })).toBe(0);
@@ -2113,6 +2130,23 @@ async function createProjectWithPlan(options: { env: NodeJS.ProcessEnv; cwd: str
   ).toBe(0);
 
   return projectId;
+}
+
+function usageTotals(teamRun: TeamRun): { inputTokens: number; outputTokens: number; totalTokens: number; roles: number } {
+  return teamRun.roles.reduce(
+    (totals, role) => {
+      if (role.usage === undefined) {
+        return totals;
+      }
+      return {
+        inputTokens: totals.inputTokens + role.usage.inputTokens,
+        outputTokens: totals.outputTokens + role.usage.outputTokens,
+        totalTokens: totals.totalTokens + role.usage.inputTokens + role.usage.outputTokens,
+        roles: totals.roles + 1
+      };
+    },
+    { inputTokens: 0, outputTokens: 0, totalTokens: 0, roles: 0 }
+  );
 }
 
 async function writeWorkflow(cwd: string, stepIds: WorkflowStepId[]): Promise<void> {

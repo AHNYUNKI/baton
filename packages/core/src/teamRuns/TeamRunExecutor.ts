@@ -14,6 +14,7 @@ import { buildRolePrompt, type UpstreamContextEntry } from "./buildRolePrompt.js
 import { collectUpstreamRoleIds } from "./collectUpstream.js";
 import { computeExecutionOrder } from "./order.js";
 import { summarizeWorkerResult } from "./summarizeResult.js";
+import { readOrEstimateUsage } from "./usage.js";
 import type { AgentWorkerRegistry } from "./AgentWorkerRegistry.js";
 import type { TeamRunStore } from "./TeamRunStore.js";
 
@@ -51,6 +52,11 @@ export type StartTeamRunOptions = {
 export type DecideTeamRunOptions = {
   decision: Extract<ApprovalStatus, "approved" | "rejected">;
   note?: string;
+};
+
+type WorkerInvocation = {
+  prompt: string;
+  result: WorkerRunResult;
 };
 
 const preDispatchStepId = "pre-dispatch";
@@ -225,7 +231,7 @@ export class TeamRunExecutor {
       teamRun = await this.teamRunStore.save(teamRun);
 
       const registeredAgent = this.agentWorkerRegistry.has(roleState.assignedAgentId);
-      const result = await this.invokeWorker({
+      const invocation = await this.invokeWorker({
         teamRun,
         project,
         teamPlan,
@@ -233,6 +239,7 @@ export class TeamRunExecutor {
         upstream,
         timeoutMs: options.timeoutMs ?? this.timeoutMs
       });
+      const { result } = invocation;
       const roleArtifacts = await this.writeRoleArtifacts(teamRun, roleId, result);
       artifacts.push(...roleArtifacts);
 
@@ -240,18 +247,21 @@ export class TeamRunExecutor {
       const status: TeamRunRole["status"] = result.success ? "completed" : "failed";
       const reason = roleReason(result, registeredAgent, roleState.assignedAgentId);
       const summary = result.success ? summarizeWorkerResult(result, this.relayMaxChars) : undefined;
+      const usage = readOrEstimateUsage(invocation.prompt, result);
       const { summary: _previousSummary, ...roleWithoutSummary } = teamRun.roles[roleIndex] ?? roleState;
       teamRun = replaceRole(teamRun, roleIndex, {
         ...roleWithoutSummary,
         status,
         completedAt,
         artifacts: roleArtifacts,
+        usage,
         ...(summary === undefined ? {} : { summary }),
         ...(reason === undefined ? {} : { reason })
       });
       await this.roleEvent(teamRun, result.success ? "teamRun.role.completed" : "teamRun.role.failed", roleId, {
         exitCode: result.exitCode,
-        stub: result.metadata?.stub === true
+        stub: result.metadata?.stub === true,
+        usage
       });
       teamRun = await this.teamRunStore.save(teamRun);
 
@@ -275,18 +285,20 @@ export class TeamRunExecutor {
     role: TeamRole;
     upstream: UpstreamContextEntry[];
     timeoutMs: number | undefined;
-  }): Promise<WorkerRunResult> {
+  }): Promise<WorkerInvocation> {
     const startedAt = Date.now();
+    let prompt = "";
     try {
-      return await this.agentWorkerRegistry.resolve(input.role.assignedAgentId).run({
+      prompt = buildRolePrompt({
+        project: input.project,
+        role: input.role,
+        teamPlan: input.teamPlan,
+        runDirectory: this.artifactStore.getRunDir(input.teamRun.id),
+        upstream: input.upstream
+      });
+      const result = await this.agentWorkerRegistry.resolve(input.role.assignedAgentId).run({
         cwd: requiredWorktreePath(input.teamRun),
-        prompt: buildRolePrompt({
-          project: input.project,
-          role: input.role,
-          teamPlan: input.teamPlan,
-          runDirectory: this.artifactStore.getRunDir(input.teamRun.id),
-          upstream: input.upstream
-        }),
+        prompt,
         metadata: {
           teamRunId: input.teamRun.id,
           projectId: input.teamRun.projectId,
@@ -296,14 +308,18 @@ export class TeamRunExecutor {
         },
         ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs })
       });
+      return { prompt, result };
     } catch (error) {
       return {
-        success: false,
-        exitCode: null,
-        stdout: "",
-        stderr: errorMessage(error),
-        durationMs: Date.now() - startedAt,
-        artifacts: []
+        prompt,
+        result: {
+          success: false,
+          exitCode: null,
+          stdout: "",
+          stderr: errorMessage(error),
+          durationMs: Date.now() - startedAt,
+          artifacts: []
+        }
       };
     }
   }
