@@ -10,6 +10,7 @@ import {
   ArtifactStore,
   TeamRunExecutor,
   TeamRunStore,
+  estimateTokens,
   fixedClock,
   type TeamRunProjectService,
   type WorkerAdapter,
@@ -61,6 +62,12 @@ describe("TeamRunExecutor", () => {
     expect(harness.worker.inputs.map((input) => input.metadata?.roleId)).toEqual(["lead", "architect", "implementer"]);
     expect(harness.worker.inputs.every((input) => input.cwd === result.teamRun.worktreePath)).toBe(true);
     expect(result.teamRun.roles.every((role) => role.reason === "Completed by stub worker.")).toBe(true);
+    expect(result.teamRun.roles.find((role) => role.roleId === "lead")?.usage).toEqual({
+      inputTokens: estimateTokens(promptForRole(harness.worker.inputs, "lead")),
+      outputTokens: estimateTokens("ok lead"),
+      estimated: true
+    });
+    expect(result.teamRun.roles.every((role) => role.usage?.estimated === true)).toBe(true);
 
     const events = await readEvents(harness.artifactStore.getRunDir("team-run-1"));
     expect(events.map((event) => event.type)).toEqual([
@@ -79,6 +86,9 @@ describe("TeamRunExecutor", () => {
       ["lead"],
       ["lead", "architect"]
     ]);
+    expect(events.filter((event) => event.type === "teamRun.role.completed").map((event) => event.payload.usage)).toEqual(
+      result.teamRun.roles.map((role) => role.usage)
+    );
   });
 
   it("relays completed reporting-chain summaries without unrelated sibling context", async () => {
@@ -174,6 +184,11 @@ describe("TeamRunExecutor", () => {
           startedAt: "2026-06-17T00:00:00.000Z",
           completedAt: "2026-06-17T00:00:00.000Z",
           summary: "persisted lead summary",
+          usage: {
+            inputTokens: 12,
+            outputTokens: 3,
+            estimated: false
+          },
           artifacts: ["/tmp/team-run-1/steps/lead.result.json"]
         },
         {
@@ -198,6 +213,11 @@ describe("TeamRunExecutor", () => {
     expect(promptForRole(harness.worker.inputs, "architect")).toContain("persisted lead summary");
     expect(promptForRole(harness.worker.inputs, "architect")).toContain("/tmp/team-run-1/steps/lead.result.json");
     expect(result.teamRun.roles.map((role) => role.status)).toEqual(["completed", "completed", "completed"]);
+    expect(result.teamRun.roles.find((role) => role.roleId === "lead")?.usage).toEqual({
+      inputTokens: 12,
+      outputTokens: 3,
+      estimated: false
+    });
   });
 
   it("keeps awaiting runs gated on resume when approval is still pending", async () => {

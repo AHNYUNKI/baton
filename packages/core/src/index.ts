@@ -38,6 +38,7 @@ export * from "./teamRuns/buildRolePrompt.js";
 export * from "./teamRuns/collectUpstream.js";
 export * from "./teamRuns/order.js";
 export * from "./teamRuns/summarizeResult.js";
+export * from "./teamRuns/usage.js";
 export * from "./teamRuns/TeamRunStore.js";
 export * from "./teamRuns/TeamRunExecutor.js";
 export * from "./journal/resolveObsidianVault.js";

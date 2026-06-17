@@ -1,0 +1,47 @@
+{
+  "version": "1",
+  "runId": "token-usage-v0.19.2",
+  "buildsOn": "context-relay-v0.19.1",
+  "baseBranch": "origin/main",
+  "language": "typescript",
+  "gates": ["pnpm typecheck", "pnpm test", "pnpm build"],
+  "notes": "Baton 호출분 토큰 사용량을 플랫폼별 집계·표시. stub은 추정치(estimated 라벨), 실제 디스패치 시 실측 자동 반영. 구독 잔량/credential 접근 금지. Swift/실제 파싱 후속.",
+  "tasks": [
+    {
+      "id": "task-U01",
+      "title": "스키마: TeamRunRoleUsage + role.usage?",
+      "description": "packages/schemas/src/teamRun.schema.ts: TeamRunRoleUsageSchema = z.object({ inputTokens: z.number().int().nonnegative(), outputTokens: z.number().int().nonnegative(), estimated: z.boolean() }). TeamRunRoleSchema에 usage: TeamRunRoleUsageSchema.optional() 추가. 선택 필드라 team-run/readApi 봉투 회귀 0. 타입 export. 테스트: usage 부재/존재 수용, 음수/비정수 거부, team-run 봉투 round-trip.",
+      "targetFiles": ["packages/schemas/src/teamRun.schema.ts", "packages/schemas/test/teamRun.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-09", "AC-10"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test"]
+    },
+    {
+      "id": "task-U02",
+      "title": "usage.ts (순수): estimate / readOrEstimate / aggregate",
+      "description": "packages/core/src/teamRuns/usage.ts: estimateTokens(text): number = Math.ceil(text.length/4)(빈→0, 근사 주석). readOrEstimateUsage(prompt, result: WorkerRunResult): {inputTokens,outputTokens,estimated} — result.metadata.usage{inputTokens,outputTokens}가 유효한 음이 아닌 숫자면 {…,estimated:false}, 아니면 {inputTokens:estimateTokens(prompt), outputTokens:estimateTokens(result.stdout), estimated:true}. aggregateTeamRunUsage(teamRun): {byPlatform: Record<agentId,{inputTokens,outputTokens,totalTokens,roles}>, total:{inputTokens,outputTokens,totalTokens}, anyEstimated} — usage 있는 role을 assignedAgentId별 합산. 순수. index export. 테스트: estimate 경계(빈/길이), 실측 우선/추정 폴백/불량 metadata 폴백, 집계 플랫폼별·총합·anyEstimated.",
+      "targetFiles": ["packages/core/src/teamRuns/usage.ts", "packages/core/src/index.ts", "packages/core/test/teamRuns/usage.test.ts"],
+      "dependencies": ["task-U01"],
+      "acceptanceCriteria": ["AC-02", "AC-03", "AC-04"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-U03",
+      "title": "TeamRunExecutor: 완료 시 usage 산출·저장",
+      "description": "packages/core/src/teamRuns/TeamRunExecutor.ts: 역할 완료(성공/실패) 시 readOrEstimateUsage(prompt, result)로 usage 산출 → replaceRole에 usage 포함 저장(summary 저장 지점과 동일). prompt 접근을 위해 invokeWorker가 usage를 계산해 반환하거나 prompt를 호출부에 노출(둘 중 깔끔한 쪽). teamRun.role.completed 이벤트 payload에 usage 요약(inputTokens/outputTokens/estimated) 추가. resume 안전(영속). 테스트: 완료 시 role.usage 저장(추정), resume 후 usage 보존, 역할당 1회 유지.",
+      "targetFiles": ["packages/core/src/teamRuns/TeamRunExecutor.ts", "packages/core/test/teamRuns/teamRunExecutor.test.ts"],
+      "dependencies": ["task-U02"],
+      "acceptanceCriteria": ["AC-05", "AC-06"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-U04",
+      "title": "CLI: plan run show 사용량 요약(플랫폼별, 추정/실측)",
+      "description": "packages/cli/src/commands/project.ts: plan run show <teamRunId> 텍스트 출력에 '토큰 사용량(추정/실측)' 섹션 추가 — aggregateTeamRunUsage 결과를 플랫폼별 표(codex/claude: input/output/total/역할수) + 총합. anyEstimated면 '※ 추정치 포함(실측 디스패치 시 정확)' 주석. --json은 team-run 봉투에 role.usage가 자동 포함되므로 구조 변경 없음. 테스트: usage 있는 team-run show → 플랫폼별 수치/추정 주석 출력, usage 없으면 0/생략 graceful.",
+      "targetFiles": ["packages/cli/src/commands/project.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-U03"],
+      "acceptanceCriteria": ["AC-07", "AC-08"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build"]
+    }
+  ]
+}

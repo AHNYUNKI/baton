@@ -6,6 +6,12 @@ export const TeamRunRoleStatusSchema = z.enum(["planned", "running", "completed"
 
 export const TeamRunStatusSchema = z.enum(["planned", "awaiting-approval", "running", "completed", "failed", "cancelled"]);
 
+export const TeamRunRoleUsageSchema = z.object({
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  estimated: z.boolean()
+});
+
 export const TeamRunRoleSchema = z.object({
   roleId: z.string().min(1),
   name: z.string().min(1),
@@ -15,6 +21,7 @@ export const TeamRunRoleSchema = z.object({
   completedAt: z.string().datetime().optional(),
   reason: z.string().min(1).optional(),
   summary: z.string().optional(),
+  usage: TeamRunRoleUsageSchema.optional(),
   artifacts: z.array(z.string().min(1)).optional()
 });
 
@@ -33,5 +40,6 @@ export const TeamRunSchema = z.object({
 
 export type TeamRunRoleStatus = z.infer<typeof TeamRunRoleStatusSchema>;
 export type TeamRunStatus = z.infer<typeof TeamRunStatusSchema>;
+export type TeamRunRoleUsage = z.infer<typeof TeamRunRoleUsageSchema>;
 export type TeamRunRole = z.infer<typeof TeamRunRoleSchema>;
 export type TeamRun = z.infer<typeof TeamRunSchema>;

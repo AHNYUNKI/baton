@@ -8,6 +8,7 @@ import {
   ProjectService,
   TeamRunExecutor,
   TeamRunStore,
+  aggregateTeamRunUsage,
   batonHome,
   createAgentWorkerRegistry,
   generateTeamPlan,
@@ -339,7 +340,7 @@ async function showTeamRun(args: ParsedPlanRunShowArgs, context: CommandContext)
   });
   const teamRun = await store.load(args.teamRunId);
 
-  printTeamRunResult(teamRun, args.json, context);
+  printTeamRunResult(teamRun, args.json, context, { includeUsage: true });
   return 0;
 }
 
@@ -680,7 +681,7 @@ function createTeamRunExecutor(context: CommandContext, projectService: ProjectS
   };
 }
 
-function printTeamRunResult(teamRun: TeamRun, json: boolean, context: CommandContext): void {
+function printTeamRunResult(teamRun: TeamRun, json: boolean, context: CommandContext, options: { includeUsage?: boolean } = {}): void {
   if (json) {
     context.stdout(JSON.stringify(makeEnvelope("team-run", teamRun), null, 2));
     return;
@@ -697,8 +698,29 @@ function printTeamRunResult(teamRun: TeamRun, json: boolean, context: CommandCon
   for (const role of teamRun.roles) {
     context.stdout(`- ${role.roleId}: ${role.name} (${role.status})${role.reason === undefined ? "" : ` - ${role.reason}`}`);
   }
+  if (options.includeUsage === true) {
+    printTeamRunUsage(teamRun, context);
+  }
   if (teamRun.status === "awaiting-approval") {
     context.stdout(`승인 대기: baton project plan run approve ${teamRun.id}`);
+  }
+}
+
+function printTeamRunUsage(teamRun: TeamRun, context: CommandContext): void {
+  const usage = aggregateTeamRunUsage(teamRun);
+  const rows = Object.entries(usage.byPlatform).sort(([left], [right]) => left.localeCompare(right));
+  const roleCount = rows.reduce((sum, [, platform]) => sum + platform.roles, 0);
+
+  context.stdout("토큰 사용량(추정/실측)");
+  context.stdout("플랫폼\t입력\t출력\t합계\t역할수");
+  for (const [platform, platformUsage] of rows) {
+    context.stdout(
+      `${platform}\t${platformUsage.inputTokens}\t${platformUsage.outputTokens}\t${platformUsage.totalTokens}\t${platformUsage.roles}`
+    );
+  }
+  context.stdout(`총합\t${usage.total.inputTokens}\t${usage.total.outputTokens}\t${usage.total.totalTokens}\t${roleCount}`);
+  if (usage.anyEstimated) {
+    context.stdout("※ 추정치 포함(실측 디스패치 시 정확)");
   }
 }
 

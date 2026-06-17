@@ -146,7 +146,12 @@ function teamRunFixture(): TeamRun {
         roleId: "lead",
         name: "Lead",
         assignedAgentId: "claude",
-        status: "planned"
+        status: "completed",
+        usage: {
+          inputTokens: 12,
+          outputTokens: 4,
+          estimated: true
+        }
       }
     ]
   };
