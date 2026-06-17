@@ -1,0 +1,56 @@
+{
+  "version": "1",
+  "runId": "context-relay-v0.19.1",
+  "buildsOn": "execution-engine-v0.19",
+  "baseBranch": "origin/main",
+  "language": "typescript",
+  "gates": ["pnpm typecheck", "pnpm test", "pnpm build"],
+  "notes": "이벤트 트리거형 단발 디스패치에 컨텍스트 릴레이 추가. 보고 체인 상위만·요약 절단·산출물 경로 참조(토큰 효율). 단방향·역할당 1회·StubWorker 유지. Swift/실제 디스패치 금지.",
+  "tasks": [
+    {
+      "id": "task-R01",
+      "title": "summarizeResult (순수, 절단 토큰 가드)",
+      "description": "packages/core/src/teamRuns/summarizeResult.ts: summarizeWorkerResult(result: WorkerRunResult, maxChars=1500): string — 성공 시 stdout, 실패 시 stderr를 maxChars로 절단 + 절단 시 '…(truncated)' 표시. 빈/공백 출력 → 간단한 상태 문구('(출력 없음)'). 순수. index export. 테스트: 짧은 출력 그대로, 긴 출력 절단+표시, 빈 출력, 실패 시 stderr 사용.",
+      "targetFiles": ["packages/core/src/teamRuns/summarizeResult.ts", "packages/core/src/index.ts", "packages/core/test/teamRuns/summarizeResult.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-03"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-R02",
+      "title": "collectUpstream (순수, 보고 체인)",
+      "description": "packages/core/src/teamRuns/collectUpstream.ts: collectUpstreamRoleIds(roleId, teamPlan): string[] — roleId의 reportsTo 체인을 root까지 올라가 root→…→직속 부모 순서로 반환(자기 제외). 사이클/미존재 부모는 끊김(거기서 중단). order.ts의 hasCyclicAncestry 패턴 재사용. 순수. index export. 테스트: 단일(빈)/2단계/3단계 체인 순서(root 먼저)/미존재 부모 중단/사이클 방어(무한루프 없음).",
+      "targetFiles": ["packages/core/src/teamRuns/collectUpstream.ts", "packages/core/src/index.ts", "packages/core/test/teamRuns/collectUpstream.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-02"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-R03",
+      "title": "스키마: TeamRunRole.summary?",
+      "description": "packages/schemas/src/teamRun.schema.ts: TeamRunRoleSchema에 summary: z.string().optional() 추가. 선택 필드라 기존 team-run/readApi 봉투 회귀 0. 테스트: summary 부재/존재 모두 수용, team-run 봉투 round-trip.",
+      "targetFiles": ["packages/schemas/src/teamRun.schema.ts", "packages/schemas/test/teamRun.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-07", "AC-10"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test"]
+    },
+    {
+      "id": "task-R04",
+      "title": "buildRolePrompt: Upstream Context 섹션",
+      "description": "packages/core/src/teamRuns/buildRolePrompt.ts: 입력에 upstream?: UpstreamContextEntry[]{roleId,name,assignedAgentId,status,summary,artifacts:string[]} 추가. '## Upstream Context (대표가 전달한 이전 작업 결과)' 섹션 렌더 — 항목별 이름/roleId/담당AI/상태 + summary(절단됨) + 산출물 경로 목록(경로만, 내용 미첨부). upstream 비면 섹션 생략 또는 '(이전 단계 없음)'. 기존 섹션 유지. 테스트: upstream 있음(부모 요약·경로 포함)/없음(섹션 생략)/산출물 내용 미첨부.",
+      "targetFiles": ["packages/core/src/teamRuns/buildRolePrompt.ts", "packages/core/test/teamRuns/buildRolePrompt.test.ts"],
+      "dependencies": ["task-R01", "task-R02"],
+      "acceptanceCriteria": ["AC-04", "AC-06"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-R05",
+      "title": "TeamRunExecutor: summary 저장 + upstream 주입 + 트리거 이벤트",
+      "description": "packages/core/src/teamRuns/TeamRunExecutor.ts: (1) 역할 호출 직전 collectUpstreamRoleIds(roleId, teamPlan) → 완료(status==='completed')된 상위 role만 UpstreamContextEntry로 매핑(name/assignedAgentId/status/summary/artifacts) → buildRolePrompt에 전달. (2) teamRun.role.started 이벤트 payload에 upstreamRoleIds 추가. (3) 역할 성공 완료 시 summary = summarizeWorkerResult(result, relayMaxChars) 를 role에 저장(replaceRole에 summary 포함). (4) TeamRunExecutorOptions.relayMaxChars?(기본 1500). resume 시 upstream은 영속된 roles[].summary에서 구성(메모리 의존 금지). 단방향·역할당 1회·stub 유지. 테스트: 자식이 부모 summary 수신 / 무관 형제 컨텍스트 미수신 / summary 영속 / resume 후 상위 summary 유지 / 절단 적용.",
+      "targetFiles": ["packages/core/src/teamRuns/TeamRunExecutor.ts", "packages/core/test/teamRuns/teamRunExecutor.test.ts"],
+      "dependencies": ["task-R03", "task-R04"],
+      "acceptanceCriteria": ["AC-01", "AC-05", "AC-07", "AC-08", "AC-09"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build"]
+    }
+  ]
+}

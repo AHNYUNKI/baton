@@ -10,8 +10,10 @@ import type { WorktreeManager } from "../git/GitWorktreeManager.js";
 import type { Clock } from "../ports/Clock.js";
 import { systemClock } from "../ports/Clock.js";
 import type { WorkerRunResult } from "../workers/WorkerAdapter.js";
-import { buildRolePrompt } from "./buildRolePrompt.js";
+import { buildRolePrompt, type UpstreamContextEntry } from "./buildRolePrompt.js";
+import { collectUpstreamRoleIds } from "./collectUpstream.js";
 import { computeExecutionOrder } from "./order.js";
+import { summarizeWorkerResult } from "./summarizeResult.js";
 import type { AgentWorkerRegistry } from "./AgentWorkerRegistry.js";
 import type { TeamRunStore } from "./TeamRunStore.js";
 
@@ -37,6 +39,7 @@ export type TeamRunExecutorOptions = {
   clock?: Clock;
   worktreeRoot?: string;
   timeoutMs?: number;
+  relayMaxChars?: number;
   idGenerator?: () => string;
 };
 
@@ -62,6 +65,7 @@ export class TeamRunExecutor {
   private readonly clock: Clock;
   private readonly worktreeRoot: string | undefined;
   private readonly timeoutMs: number | undefined;
+  private readonly relayMaxChars: number;
   private readonly idGenerator: () => string;
 
   public constructor(options: TeamRunExecutorOptions) {
@@ -73,6 +77,7 @@ export class TeamRunExecutor {
     this.clock = options.clock ?? systemClock;
     this.worktreeRoot = options.worktreeRoot;
     this.timeoutMs = options.timeoutMs;
+    this.relayMaxChars = options.relayMaxChars ?? 1500;
     this.idGenerator = options.idGenerator ?? randomUUID;
   }
 
@@ -208,13 +213,15 @@ export class TeamRunExecutor {
         continue;
       }
 
+      const upstream = buildUpstreamContext(roleId, teamPlan, teamRun);
+      const upstreamRoleIds = upstream.map((entry) => entry.roleId);
       const startedAt = roleState.startedAt ?? this.now();
       teamRun = replaceRole(teamRun, roleIndex, {
         ...roleState,
         status: "running",
         startedAt
       });
-      await this.roleEvent(teamRun, "teamRun.role.started", roleId, { assignedAgentId: roleState.assignedAgentId });
+      await this.roleEvent(teamRun, "teamRun.role.started", roleId, { assignedAgentId: roleState.assignedAgentId, upstreamRoleIds });
       teamRun = await this.teamRunStore.save(teamRun);
 
       const registeredAgent = this.agentWorkerRegistry.has(roleState.assignedAgentId);
@@ -223,6 +230,7 @@ export class TeamRunExecutor {
         project,
         teamPlan,
         role: planRole,
+        upstream,
         timeoutMs: options.timeoutMs ?? this.timeoutMs
       });
       const roleArtifacts = await this.writeRoleArtifacts(teamRun, roleId, result);
@@ -231,11 +239,14 @@ export class TeamRunExecutor {
       const completedAt = this.now();
       const status: TeamRunRole["status"] = result.success ? "completed" : "failed";
       const reason = roleReason(result, registeredAgent, roleState.assignedAgentId);
+      const summary = result.success ? summarizeWorkerResult(result, this.relayMaxChars) : undefined;
+      const { summary: _previousSummary, ...roleWithoutSummary } = teamRun.roles[roleIndex] ?? roleState;
       teamRun = replaceRole(teamRun, roleIndex, {
-        ...(teamRun.roles[roleIndex] ?? roleState),
+        ...roleWithoutSummary,
         status,
         completedAt,
         artifacts: roleArtifacts,
+        ...(summary === undefined ? {} : { summary }),
         ...(reason === undefined ? {} : { reason })
       });
       await this.roleEvent(teamRun, result.success ? "teamRun.role.completed" : "teamRun.role.failed", roleId, {
@@ -262,6 +273,7 @@ export class TeamRunExecutor {
     project: Project;
     teamPlan: TeamPlan;
     role: TeamRole;
+    upstream: UpstreamContextEntry[];
     timeoutMs: number | undefined;
   }): Promise<WorkerRunResult> {
     const startedAt = Date.now();
@@ -272,7 +284,8 @@ export class TeamRunExecutor {
           project: input.project,
           role: input.role,
           teamPlan: input.teamPlan,
-          runDirectory: this.artifactStore.getRunDir(input.teamRun.id)
+          runDirectory: this.artifactStore.getRunDir(input.teamRun.id),
+          upstream: input.upstream
         }),
         metadata: {
           teamRunId: input.teamRun.id,
@@ -363,6 +376,29 @@ export class TeamRunExecutor {
   private now(): string {
     return this.clock.now().toISOString();
   }
+}
+
+function buildUpstreamContext(roleId: string, teamPlan: TeamPlan, teamRun: TeamRun): UpstreamContextEntry[] {
+  const roleById = new Map(teamRun.roles.map((role) => [role.roleId, role]));
+  const upstream: UpstreamContextEntry[] = [];
+
+  for (const upstreamRoleId of collectUpstreamRoleIds(roleId, teamPlan)) {
+    const role = roleById.get(upstreamRoleId);
+    if (role?.status !== "completed") {
+      continue;
+    }
+
+    const entry = {
+      roleId: role.roleId,
+      name: role.name,
+      assignedAgentId: role.assignedAgentId,
+      status: role.status,
+      artifacts: role.artifacts ?? []
+    };
+    upstream.push(role.summary === undefined ? entry : { ...entry, summary: role.summary });
+  }
+
+  return upstream;
 }
 
 function preDispatchApproval(teamRun: TeamRun): Approval | undefined {

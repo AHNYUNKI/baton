@@ -74,6 +74,47 @@ describe("TeamRunExecutor", () => {
       "teamRun.completed"
     ]);
     expect(await readFile(path.join(harness.artifactStore.getRunDir("team-run-1"), "logs", "lead.stdout.log"), "utf8")).toContain("ok lead");
+    expect(events.filter((event) => event.type === "teamRun.role.started").map((event) => event.payload.upstreamRoleIds)).toEqual([
+      [],
+      ["lead"],
+      ["lead", "architect"]
+    ]);
+  });
+
+  it("relays completed reporting-chain summaries without unrelated sibling context", async () => {
+    const harness = await createHarness({
+      teamPlan: siblingTeamPlanFixture(),
+      workerResults: [
+        { stdout: "lead summary for descendants" },
+        { stdout: "architect summary for implementer" },
+        { stdout: "sibling summary that must not relay" },
+        { stdout: "implementer result" }
+      ]
+    });
+    await harness.executor.start("project-1");
+
+    const result = await harness.executor.decide("team-run-1", { decision: "approved" });
+
+    expect(result.outcome).toBe("completed");
+    expect(harness.worker.inputs.map((input) => input.metadata?.roleId)).toEqual(["lead", "architect", "reviewer", "implementer"]);
+    const implementerPrompt = promptForRole(harness.worker.inputs, "implementer");
+    expect(implementerPrompt).toContain("## Upstream Context");
+    expect(implementerPrompt).toContain("lead summary for descendants");
+    expect(implementerPrompt).toContain("architect summary for implementer");
+    expect(implementerPrompt).not.toContain("sibling summary that must not relay");
+  });
+
+  it("persists truncated summaries for successful roles", async () => {
+    const harness = await createHarness({
+      relayMaxChars: 5,
+      workerResults: [{ stdout: "abcdefghi" }, { stdout: "architect ok" }, { stdout: "implementer ok" }]
+    });
+    await harness.executor.start("project-1");
+
+    const result = await harness.executor.decide("team-run-1", { decision: "approved" });
+
+    expect(result.teamRun.roles.find((role) => role.roleId === "lead")?.summary).toBe("abcde…(truncated)");
+    expect(promptForRole(harness.worker.inputs, "architect")).toContain("abcde…(truncated)");
   });
 
   it("rejects by skipping planned roles and cancelling the team run", async () => {
@@ -131,7 +172,9 @@ describe("TeamRunExecutor", () => {
           assignedAgentId: "codex",
           status: "completed",
           startedAt: "2026-06-17T00:00:00.000Z",
-          completedAt: "2026-06-17T00:00:00.000Z"
+          completedAt: "2026-06-17T00:00:00.000Z",
+          summary: "persisted lead summary",
+          artifacts: ["/tmp/team-run-1/steps/lead.result.json"]
         },
         {
           roleId: "architect",
@@ -152,6 +195,8 @@ describe("TeamRunExecutor", () => {
 
     expect(result.outcome).toBe("completed");
     expect(harness.worker.inputs.map((input) => input.metadata?.roleId)).toEqual(["architect", "implementer"]);
+    expect(promptForRole(harness.worker.inputs, "architect")).toContain("persisted lead summary");
+    expect(promptForRole(harness.worker.inputs, "architect")).toContain("/tmp/team-run-1/steps/lead.result.json");
     expect(result.teamRun.roles.map((role) => role.status)).toEqual(["completed", "completed", "completed"]);
   });
 
@@ -189,6 +234,8 @@ type HarnessOptions = {
   workerResults?: Array<Partial<WorkerRunResult>>;
   worktreeExitCode?: number;
   worktreeStderr?: string;
+  teamPlan?: TeamPlan;
+  relayMaxChars?: number;
 };
 
 async function createHarness(options: HarnessOptions = {}): Promise<{
@@ -213,13 +260,14 @@ async function createHarness(options: HarnessOptions = {}): Promise<{
     worker,
     worktree,
     executor: new TeamRunExecutor({
-      projectService: projectServiceFixture(),
+      projectService: projectServiceFixture(options.teamPlan),
       teamRunStore,
       artifactStore,
       worktreeManager: worktree,
       agentWorkerRegistry: registry,
       clock: fixedClock("2026-06-17T00:00:00.000Z"),
-      idGenerator: () => "team-run-1"
+      idGenerator: () => "team-run-1",
+      ...(options.relayMaxChars === undefined ? {} : { relayMaxChars: options.relayMaxChars })
     })
   };
 }
@@ -271,7 +319,7 @@ class RecordingWorktreeManager implements WorktreeManager {
   }
 }
 
-function projectServiceFixture(): TeamRunProjectService {
+function projectServiceFixture(teamPlan = teamPlanFixture()): TeamRunProjectService {
   const project: Project = {
     id: "project-1",
     name: "Baton",
@@ -279,7 +327,7 @@ function projectServiceFixture(): TeamRunProjectService {
     agentIds: ["codex"],
     leadAgentId: "codex",
     overview: "Build Baton safely.",
-    teamPlan: teamPlanFixture(),
+    teamPlan,
     createdAt: "2026-06-17T00:00:00.000Z"
   };
 
@@ -288,7 +336,7 @@ function projectServiceFixture(): TeamRunProjectService {
       return projectId === project.id ? project : undefined;
     },
     async getTeamPlan(projectId: string): Promise<TeamPlan | undefined> {
-      return projectId === project.id ? teamPlanFixture() : undefined;
+      return projectId === project.id ? teamPlan : undefined;
     }
   };
 }
@@ -309,6 +357,44 @@ function teamPlanFixture(): TeamPlan {
         description: "Designs work.",
         assignedAgentId: "codex",
         instructions: "Design safely.",
+        reportsTo: "lead"
+      },
+      {
+        id: "implementer",
+        name: "Implementer",
+        description: "Implements work.",
+        assignedAgentId: "codex",
+        instructions: "Implement safely.",
+        reportsTo: "architect"
+      }
+    ]
+  };
+}
+
+function siblingTeamPlanFixture(): TeamPlan {
+  return {
+    roles: [
+      {
+        id: "lead",
+        name: "Lead",
+        description: "Coordinates work.",
+        assignedAgentId: "codex",
+        instructions: "Lead the plan."
+      },
+      {
+        id: "architect",
+        name: "Architect",
+        description: "Designs work.",
+        assignedAgentId: "codex",
+        instructions: "Design safely.",
+        reportsTo: "lead"
+      },
+      {
+        id: "reviewer",
+        name: "Reviewer",
+        description: "Reviews work.",
+        assignedAgentId: "codex",
+        instructions: "Review safely.",
         reportsTo: "lead"
       },
       {
@@ -344,9 +430,17 @@ function teamRunFixture(): TeamRun {
   };
 }
 
-async function readEvents(runDirectory: string): Promise<Array<{ type: string }>> {
+function promptForRole(inputs: WorkerRunInput[], roleId: string): string {
+  const input = inputs.find((candidate) => candidate.metadata?.roleId === roleId);
+  if (input === undefined) {
+    throw new Error(`Missing worker input for role: ${roleId}`);
+  }
+  return input.prompt;
+}
+
+async function readEvents(runDirectory: string): Promise<Array<{ type: string; payload: Record<string, unknown> }>> {
   return (await readFile(path.join(runDirectory, "events.jsonl"), "utf8"))
     .trim()
     .split("\n")
-    .map((line) => JSON.parse(line) as { type: string });
+    .map((line) => JSON.parse(line) as { type: string; payload: Record<string, unknown> });
 }
