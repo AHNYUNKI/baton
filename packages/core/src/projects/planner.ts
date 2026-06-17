@@ -57,7 +57,8 @@ export function buildPlanPrompt(input: BuildPlanPromptInput): string {
             name: "string-non-empty",
             description: "string",
             assignedAgentId: input.agentIds[0] ?? "codex",
-            instructions: "string"
+            instructions: "string",
+            reportsTo: null
           }
         ]
       },
@@ -72,6 +73,10 @@ export function buildPlanPrompt(input: BuildPlanPromptInput): string {
     "- role ids must remain short English slugs, for example analysis-design.",
     "- assignedAgentId values must be copied exactly from the available values.",
     "- assignedAgentId must be one of the available values.",
+    "- 2~3단계 계층을 만들고 전부 평면인 조직은 지양하세요.",
+    "- 일부 역할은 대표 직속 매니저로 두고 reportsTo를 null로 설정하세요.",
+    "- 나머지 역할은 존재하는 매니저 role id로 reportsTo를 설정하세요.",
+    "- reportsTo must be an existing role id or null, and reportsTo cycles are not allowed.",
     "- Do not include markdown, prose, comments, or trailing commas."
   ].join("\n");
 }
@@ -151,6 +156,31 @@ export function clampAssignedAgents(plan: TeamPlan, agentIds: readonly string[],
   return clamped;
 }
 
+export function normalizeHierarchy(plan: TeamPlan): TeamPlan {
+  const roleIds = new Set(plan.roles.map((role) => role.id));
+  const validParentByRoleId = new Map<string, string>();
+  for (const role of plan.roles) {
+    const reportsTo = normalizedReportsTo(role.reportsTo);
+    if (reportsTo !== undefined && reportsTo !== null && reportsTo !== role.id && roleIds.has(reportsTo)) {
+      validParentByRoleId.set(role.id, reportsTo);
+    }
+  }
+
+  const cyclicRoleIds = findCyclicRoleIds(validParentByRoleId);
+  return {
+    roles: plan.roles.map((role) => {
+      const reportsTo = normalizedReportsTo(role.reportsTo);
+      if (reportsTo === null) {
+        return { ...role, reportsTo };
+      }
+      if (reportsTo === undefined || reportsTo === role.id || !roleIds.has(reportsTo) || cyclicRoleIds.has(role.id)) {
+        return withoutReportsTo(role);
+      }
+      return { ...role, reportsTo };
+    })
+  };
+}
+
 function parsePlanFromResult(result: WorkerRunResult, project: Project): { success: true; plan: TeamPlan } | { success: false; error: string } {
   if (!result.success) {
     const reason = result.stderr.trim() || result.stdout.trim() || `exit code ${result.exitCode ?? "unknown"}`;
@@ -165,7 +195,7 @@ function parsePlanFromResult(result: WorkerRunResult, project: Project): { succe
     }
     return {
       success: true,
-      plan: clampAssignedAgents(parsed.data, project.agentIds, project.leadAgentId)
+      plan: normalizeHierarchy(clampAssignedAgents(parsed.data, project.agentIds, project.leadAgentId))
     };
   } catch (error) {
     return { success: false, error: formatError(error) };
@@ -258,6 +288,56 @@ function parseJson(candidate: string): { success: true; value: unknown } | { suc
   } catch {
     return { success: false };
   }
+}
+
+function normalizedReportsTo(reportsTo: TeamPlan["roles"][number]["reportsTo"]): string | null | undefined {
+  if (reportsTo === null || reportsTo === undefined) {
+    return reportsTo;
+  }
+  const trimmed = reportsTo.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
+}
+
+function withoutReportsTo(role: TeamPlan["roles"][number]): TeamPlan["roles"][number] {
+  const { reportsTo: _reportsTo, ...rest } = role;
+  return rest;
+}
+
+function findCyclicRoleIds(parentByRoleId: ReadonlyMap<string, string>): Set<string> {
+  const cyclic = new Set<string>();
+  const visited = new Set<string>();
+  const visiting = new Set<string>();
+  const stack: string[] = [];
+
+  const visit = (roleId: string): void => {
+    if (visited.has(roleId)) {
+      return;
+    }
+    if (visiting.has(roleId)) {
+      const cycleStart = stack.indexOf(roleId);
+      if (cycleStart >= 0) {
+        for (const cyclicRoleId of stack.slice(cycleStart)) {
+          cyclic.add(cyclicRoleId);
+        }
+      }
+      return;
+    }
+
+    visiting.add(roleId);
+    stack.push(roleId);
+    const parentId = parentByRoleId.get(roleId);
+    if (parentId !== undefined) {
+      visit(parentId);
+    }
+    stack.pop();
+    visiting.delete(roleId);
+    visited.add(roleId);
+  };
+
+  for (const roleId of parentByRoleId.keys()) {
+    visit(roleId);
+  }
+  return cyclic;
 }
 
 function formatError(error: unknown): string {

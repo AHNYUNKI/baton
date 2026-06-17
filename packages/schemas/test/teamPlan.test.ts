@@ -22,6 +22,31 @@ describe("TeamPlanSchema", () => {
     expect(parsed.roles[0]?.name).toBe("Planner");
   });
 
+  it("accepts optional and nullable role hierarchy references", () => {
+    const parsed = TeamPlanSchema.parse({
+      roles: [
+        {
+          ...validPlan.roles[0],
+          id: "manager",
+          reportsTo: null
+        },
+        {
+          ...validPlan.roles[0],
+          id: "builder",
+          reportsTo: " manager "
+        },
+        {
+          ...validPlan.roles[0],
+          id: "reviewer"
+        }
+      ]
+    });
+
+    expect(parsed.roles[0]?.reportsTo).toBeNull();
+    expect(parsed.roles[1]?.reportsTo).toBe("manager");
+    expect(parsed.roles[2]?.reportsTo).toBeUndefined();
+  });
+
   it("rejects empty roles, empty names, and duplicate role ids", () => {
     expect(TeamPlanSchema.safeParse({ roles: [] }).success).toBe(false);
     expect(
@@ -32,6 +57,11 @@ describe("TeamPlanSchema", () => {
     expect(
       TeamPlanSchema.safeParse({
         roles: [validPlan.roles[0], { ...validPlan.roles[0], name: "Reviewer" }]
+      }).success
+    ).toBe(false);
+    expect(
+      TeamPlanSchema.safeParse({
+        roles: [{ ...validPlan.roles[0], reportsTo: "   " }]
       }).success
     ).toBe(false);
   });

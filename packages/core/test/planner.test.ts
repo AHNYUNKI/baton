@@ -1,7 +1,16 @@
 import type { Project } from "@baton/schemas";
 import { describe, expect, it } from "vitest";
 
-import { PlanGenerationError, buildPlanPrompt, extractJson, generateTeamPlan, type WorkerAdapter, type WorkerRunInput, type WorkerRunResult } from "../src/index.js";
+import {
+  PlanGenerationError,
+  buildPlanPrompt,
+  extractJson,
+  generateTeamPlan,
+  normalizeHierarchy,
+  type WorkerAdapter,
+  type WorkerRunInput,
+  type WorkerRunResult
+} from "../src/index.js";
 
 const project: Project = {
   id: "project-1",
@@ -35,7 +44,10 @@ describe("TeamPlan planner", () => {
     expect(prompt).toContain("Add team planning.");
     expect(prompt).toContain("- codex");
     expect(prompt).toContain("assignedAgentId");
+    expect(prompt).toContain("reportsTo");
     expect(prompt).toContain("한국어");
+    expect(prompt).toContain("2~3단계 계층");
+    expect(prompt).toContain("대표 직속 매니저");
     expect(prompt).toContain("analysis-design");
     expect(prompt).toContain("Return only one strict JSON object");
   });
@@ -111,6 +123,54 @@ describe("TeamPlan planner", () => {
 
     expect(plan.roles[0]?.assignedAgentId).toBe("claude");
   });
+
+  it("normalizes valid hierarchy without mutating the input plan", () => {
+    const plan = {
+      roles: [
+        role("manager", { reportsTo: null }),
+        role("builder", { reportsTo: "manager" }),
+        role("reviewer", { reportsTo: "builder" })
+      ]
+    };
+
+    const normalized = normalizeHierarchy(plan);
+
+    expect(normalized).not.toBe(plan);
+    expect(normalized.roles.map((current) => current.reportsTo)).toEqual([null, "manager", "builder"]);
+    expect(plan.roles.map((current) => current.reportsTo)).toEqual([null, "manager", "builder"]);
+  });
+
+  it("normalizes missing hierarchy references to representative roots", () => {
+    const normalized = normalizeHierarchy({
+      roles: [role("manager", { reportsTo: null }), role("builder", { reportsTo: "missing" })]
+    });
+
+    expect(normalized.roles[0]?.reportsTo).toBeNull();
+    expect(normalized.roles[1]?.reportsTo).toBeUndefined();
+  });
+
+  it("normalizes self references to representative roots", () => {
+    const normalized = normalizeHierarchy({
+      roles: [role("manager", { reportsTo: "manager" }), role("builder", { reportsTo: "manager" })]
+    });
+
+    expect(normalized.roles[0]?.reportsTo).toBeUndefined();
+    expect(normalized.roles[1]?.reportsTo).toBe("manager");
+  });
+
+  it("normalizes cyclic hierarchy participants to representative roots", () => {
+    const normalized = normalizeHierarchy({
+      roles: [
+        role("manager", { reportsTo: "reviewer" }),
+        role("reviewer", { reportsTo: "manager" }),
+        role("builder", { reportsTo: "manager" })
+      ]
+    });
+
+    expect(normalized.roles[0]?.reportsTo).toBeUndefined();
+    expect(normalized.roles[1]?.reportsTo).toBeUndefined();
+    expect(normalized.roles[2]?.reportsTo).toBe("manager");
+  });
 });
 
 function worker(calls: WorkerRunInput[], results: readonly WorkerRunResult[]): WorkerAdapter {
@@ -131,5 +191,16 @@ function success(stdout: string): WorkerRunResult {
     stderr: "",
     durationMs: 1,
     artifacts: []
+  };
+}
+
+function role(id: string, overrides: { reportsTo?: string | null } = {}) {
+  return {
+    id,
+    name: id,
+    description: `${id} description`,
+    assignedAgentId: "codex",
+    instructions: `${id} instructions`,
+    ...overrides
   };
 }

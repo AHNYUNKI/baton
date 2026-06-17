@@ -17,19 +17,22 @@ public struct EditableTeamRole: Equatable, Identifiable, Sendable {
     public var description: String
     public var assignedAgentId: String
     public var instructions: String
+    public var reportsTo: String?
 
     public init(
         id: String,
         name: String,
         description: String,
         assignedAgentId: String,
-        instructions: String
+        instructions: String,
+        reportsTo: String? = nil
     ) {
         self.id = id
         self.name = name
         self.description = description
         self.assignedAgentId = assignedAgentId
         self.instructions = instructions
+        self.reportsTo = reportsTo
     }
 
     public init(role: TeamRole) {
@@ -38,7 +41,8 @@ public struct EditableTeamRole: Equatable, Identifiable, Sendable {
             name: role.name,
             description: role.description,
             assignedAgentId: role.assignedAgentId,
-            instructions: role.instructions
+            instructions: role.instructions,
+            reportsTo: role.reportsTo
         )
     }
 
@@ -48,8 +52,17 @@ public struct EditableTeamRole: Equatable, Identifiable, Sendable {
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             description: description,
             assignedAgentId: assignedAgentId.trimmingCharacters(in: .whitespacesAndNewlines),
-            instructions: instructions
+            instructions: instructions,
+            reportsTo: Self.normalizedReportsTo(reportsTo)
         )
+    }
+
+    private static func normalizedReportsTo(_ value: String?) -> String? {
+        guard let value else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -106,7 +119,8 @@ public struct TeamPlanEditModel: Equatable, Sendable {
                 name: "새 역할",
                 description: "",
                 assignedAgentId: agentIds.first ?? "",
-                instructions: ""
+                instructions: "",
+                reportsTo: nil
             )
         )
     }
@@ -122,6 +136,17 @@ public struct TeamPlanEditModel: Equatable, Sendable {
             return false
         }
         roles[index].assignedAgentId = trimmed
+        return true
+    }
+
+    @discardableResult
+    public mutating func updateReportsTo(roleId: String, reportsTo: String?) -> Bool {
+        guard let index = roles.firstIndex(where: { $0.id == roleId }) else {
+            return false
+        }
+
+        let trimmed = reportsTo?.trimmingCharacters(in: .whitespacesAndNewlines)
+        roles[index].reportsTo = trimmed?.isEmpty == true ? nil : trimmed
         return true
     }
 

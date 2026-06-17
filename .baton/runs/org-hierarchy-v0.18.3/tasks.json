@@ -1,0 +1,64 @@
+{
+  "version": "1",
+  "runId": "org-hierarchy-v0.18.3",
+  "buildsOn": "app-shell-org-v0.18",
+  "baseBranch": "origin/main",
+  "language": "mixed (typescript + swift)",
+  "gates": ["pnpm typecheck", "pnpm test", "pnpm build", "swift build", "swift test"],
+  "tasks": [
+    {
+      "id": "task-H01",
+      "title": "TS 스키마: TeamRole.reportsTo (optional/nullable)",
+      "description": "packages/schemas/src/teamPlan.schema.ts: TeamRoleSchema에 reportsTo: z.string().trim().min(1).nullish() 추가. TeamPlanSchema.superRefine은 기존 고유 id 검사만 유지(참조/순환은 reject 금지 — 플래너 보정으로 흡수). TeamRole 타입에 reportsTo?: string|null 반영. 테스트(있는 파일 패턴 따름): reportsTo 부재/null/유효 문자열 수용, 고유 id 위반 거부, 기존 평면 plan 그대로 통과(회귀 0).",
+      "targetFiles": ["packages/schemas/src/teamPlan.schema.ts", "packages/schemas/src/teamPlan.schema.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02", "AC-12"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test"]
+    },
+    {
+      "id": "task-H02",
+      "title": "TS 플래너: 계층 프롬프트 + normalizeHierarchy",
+      "description": "packages/core/src/projects/planner.ts: (1) buildPlanPrompt JSON 예시에 reportsTo(null) 추가 + 한국어 규칙('2~3단계 계층, 일부는 대표 직속 매니저(reportsTo:null), 나머지는 매니저 id로 보고, 전부 평면 지양, reportsTo는 존재하는 role id이거나 null, 순환 금지'). (2) export function normalizeHierarchy(plan): TeamPlan — reportsTo가 미존재 id|자기참조|순환이면 undefined로(대표 직속). 순수. (3) parsePlanFromResult에서 clampAssignedAgents 후 normalizeHierarchy 적용. 테스트: normalizeHierarchy 4케이스(정상 유지 / 미존재→null / 자기참조→null / 순환→끊기), buildPlanPrompt에 reportsTo + 한국어 계층 문구 포함.",
+      "targetFiles": ["packages/core/src/projects/planner.ts", "packages/core/src/projects/planner.test.ts"],
+      "dependencies": ["task-H01"],
+      "acceptanceCriteria": ["AC-03", "AC-04"],
+      "testCommands": ["corepack pnpm test", "corepack pnpm build"]
+    },
+    {
+      "id": "task-H03",
+      "title": "Swift 계약 + 편집 라운드트립: reportsTo",
+      "description": "apps/macos/Baton: Contract/TeamPlan.swift TeamRole에 public let reportsTo: String? 추가(init 갱신, Codable 기본 — 키 부재/null 디코딩 OK). 호출부 컴파일 보정. Forms/TeamPlanEditModel.swift: EditableTeamRole에 reportsTo: String? 추가, init(role:)/toTeamRole()에서 보존(편집 시 계층 유실 금지). isValid 불변. 테스트: TeamRole 디코딩(키 부재→nil, null→nil, 값 보존), TeamPlanEditModel 라운드트립(reportsTo 보존).",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonKit/Contract/TeamPlan.swift", "apps/macos/Baton/Sources/BatonKit/Forms/TeamPlanEditModel.swift", "apps/macos/Baton/Tests/BatonKitTests/TeamPlanEditModelTests.swift"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-07", "AC-08"],
+      "testCommands": ["swift build", "swift test"]
+    },
+    {
+      "id": "task-H04",
+      "title": "Swift 모델: buildOrgChart 트리 + 방어",
+      "description": "apps/macos/Baton/Sources/BatonKit/Org/OrgChartModel.swift: OrgChartNode에 description: String, reportsTo: String? 추가. OrgChartTreeNode{ let node; let children:[OrgChartTreeNode]; let depth:Int; var id{node.roleId} }(Identifiable/Equatable/Sendable). OrgChart를 { leadAgentId:String?; hasPlan:Bool; roots:[OrgChartTreeNode] }로 변경. buildOrgChart: 평면 roles→roleId맵→parent=reportsTo, 미존재/자기/순환은 root로 방어, roots=대표 직속, children 재귀 + depth. teamPlan 없음→hasPlan=false, roots=[]. 테스트: 다단계 중첩, 평면(reportsTo 없음)→roots, 미존재 parent→root, 자기→root, 순환→방어, depth, status·agent 매핑, 빈 plan.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonKit/Org/OrgChartModel.swift", "apps/macos/Baton/Tests/BatonKitTests/OrgChartModelTests.swift"],
+      "dependencies": ["task-H03"],
+      "acceptanceCriteria": ["AC-05", "AC-06"],
+      "testCommands": ["swift build", "swift test"]
+    },
+    {
+      "id": "task-H05",
+      "title": "Swift 뷰: 다단계 elbow 트리 + 가로 노드 카드",
+      "description": "apps/macos/Baton/Sources/BatonApp/OrgChartView.swift: ScrollView([.horizontal,.vertical]) 패닝. 대표 카드(👑, gradient ring, displayName, '대표 AI') 정점 → 재귀 subtree(가로 노드 카드 + elbow 연결선 + 자식 HStack). 노드 카드 = 원형 역할 아이콘(SF Symbol)+상태점 badge / 직함(bold) / 부제(description, lineLimit) / 담당 AI 라벨. agent tint: claude=보라, codex=주황(AgentCatalog id 기준). 상태 = 점 + 짧은 한국어 라벨(완료/실행 중/승인 대기/대기/실패) — 색만으로 구분 금지. 하단 범례(상태색 + Claude/Codex 배지). 빈 plan→안내. (옵션) ProjectPlanView에 '보고 대상' Picker(대표/다른 역할)+updateReportsTo. swift build 컴파일 + 수동 QA.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonApp/OrgChartView.swift", "apps/macos/Baton/Sources/BatonApp/ProjectPlanView.swift"],
+      "dependencies": ["task-H04"],
+      "acceptanceCriteria": ["AC-09", "AC-10", "AC-11"],
+      "testCommands": ["swift build"]
+    },
+    {
+      "id": "task-H06",
+      "title": "README/UX + 전체 게이트(회귀 0)",
+      "description": "apps/macos/README.md/UX.md: 계층 조직도 IA(대표→매니저→실무), 가로 노드 카드, elbow 연결선, 패닝 + 수동 QA 체크리스트(다단계 표시/평면 plan 하위호환/색+라벨 병기/편집 후 계층 유지). 전체 게이트: 루트 corepack pnpm typecheck && pnpm test && pnpm build (신규 테스트 포함, 회귀 0) + apps/macos/Baton swift build && swift test. 자체 diff 리뷰. 최종 요약(UI 수동 QA·보정 동작·하위호환 명시).",
+      "targetFiles": ["apps/macos/README.md", "apps/macos/UX.md"],
+      "dependencies": ["task-H05"],
+      "acceptanceCriteria": ["AC-13", "AC-14"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build", "swift build", "swift test"]
+    }
+  ]
+}

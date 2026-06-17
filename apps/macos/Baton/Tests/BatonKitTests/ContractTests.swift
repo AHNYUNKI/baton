@@ -53,6 +53,7 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(envelope.data.first?.agentIds, ["codex"])
         XCTAssertEqual(envelope.data.first?.overview, "Build Baton")
         XCTAssertEqual(envelope.data.first?.teamPlan?.roles.first?.id, "planner")
+        XCTAssertNil(envelope.data.first?.teamPlan?.roles.first?.reportsTo)
     }
 
     func testDecodesTeamPlanEnvelope() throws {
@@ -64,6 +65,19 @@ final class ContractTests: XCTestCase {
 
         XCTAssertEqual(envelope.kind, "team-plan")
         XCTAssertEqual(envelope.data.roles.first?.assignedAgentId, "claude")
+        XCTAssertNil(envelope.data.roles.first?.reportsTo)
+    }
+
+    func testDecodesTeamRoleReportsToAsOptional() throws {
+        let json = """
+        {"schemaVersion":1,"kind":"team-plan","data":{"roles":[{"id":"manager","name":"Manager","description":"Plans","assignedAgentId":"claude","instructions":"Draft.","reportsTo":null},{"id":"builder","name":"Builder","description":"Builds","assignedAgentId":"codex","instructions":"Build.","reportsTo":"manager"},{"id":"reviewer","name":"Reviewer","description":"Reviews","assignedAgentId":"claude","instructions":"Review."}]}}
+        """
+
+        let envelope = try JSONDecoder().decode(JsonEnvelope<TeamPlan>.self, from: Data(json.utf8))
+
+        XCTAssertNil(envelope.data.roles[0].reportsTo)
+        XCTAssertEqual(envelope.data.roles[1].reportsTo, "manager")
+        XCTAssertNil(envelope.data.roles[2].reportsTo)
     }
 
     func testDecodesWatchEventNDJSONFixture() throws {

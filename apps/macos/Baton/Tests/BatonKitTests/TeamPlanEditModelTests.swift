@@ -54,4 +54,23 @@ final class TeamPlanEditModelTests: XCTestCase {
             XCTAssertEqual(error as? TeamPlanEditModelError, .invalidPlan)
         }
     }
+
+    func testReportsToRoundTripsThroughEditableRolesAndJSON() throws {
+        var model = TeamPlanEditModel(
+            agentIds: ["codex", "claude"],
+            plan: TeamPlan(roles: [
+                TeamRole(id: "manager", name: "Manager", description: "", assignedAgentId: "claude", instructions: "", reportsTo: nil),
+                TeamRole(id: "builder", name: "Builder", description: "", assignedAgentId: "codex", instructions: "", reportsTo: "manager")
+            ])
+        )
+
+        XCTAssertEqual(model.roles[1].reportsTo, "manager")
+        XCTAssertTrue(model.updateReportsTo(roleId: "builder", reportsTo: " manager "))
+        XCTAssertTrue(model.isValid)
+
+        let plan = try model.toTeamPlan()
+        XCTAssertNil(plan.roles[0].reportsTo)
+        XCTAssertEqual(plan.roles[1].reportsTo, "manager")
+        XCTAssertTrue(try model.toJSON().contains(#""reportsTo":"manager""#))
+    }
 }

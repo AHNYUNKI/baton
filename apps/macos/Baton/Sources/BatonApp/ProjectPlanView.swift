@@ -190,12 +190,21 @@ struct ProjectPlanView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
 
-                Picker("담당 AI", selection: role.assignedAgentId) {
-                    ForEach(project.agentIds, id: \.self) { agentId in
-                        Text(AgentCatalog.displayName(for: agentId)).tag(agentId)
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker("담당 AI", selection: role.assignedAgentId) {
+                        ForEach(project.agentIds, id: \.self) { agentId in
+                            Text(AgentCatalog.displayName(for: agentId)).tag(agentId)
+                        }
+                    }
+                    Picker("보고 대상", selection: reportsToBinding(for: role)) {
+                        Text("대표").tag(String?.none)
+                        ForEach(reportTargets(excluding: role.wrappedValue.id)) { candidate in
+                            Text(candidate.name.isEmpty ? candidate.id : candidate.name)
+                                .tag(Optional(candidate.id))
+                        }
                     }
                 }
-                .frame(width: 160)
+                .frame(width: 180)
 
                 Button {
                     editModel.removeRole(id: role.wrappedValue.id)
@@ -231,6 +240,19 @@ struct ProjectPlanView: View {
         Text(text)
             .font(.callout.weight(.bold))
             .foregroundStyle(BatonTheme.cream)
+    }
+
+    private func reportTargets(excluding roleId: String) -> [EditableTeamRole] {
+        editModel.roles.filter { $0.id != roleId }
+    }
+
+    private func reportsToBinding(for role: Binding<EditableTeamRole>) -> Binding<String?> {
+        Binding(
+            get: { role.wrappedValue.reportsTo },
+            set: { reportsTo in
+                _ = editModel.updateReportsTo(roleId: role.wrappedValue.id, reportsTo: reportsTo)
+            }
+        )
     }
 
     private func generate() {
