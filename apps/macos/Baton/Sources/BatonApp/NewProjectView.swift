@@ -11,6 +11,7 @@ struct NewProjectView: View {
     @State private var step: ProjectWizardStep = .name
     @State private var errorMessage: String?
     @State private var isSubmitting = false
+    @FocusState private var focusedField: ProjectFocusField?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -31,6 +32,14 @@ struct NewProjectView: View {
         .frame(width: 620)
         .background(BatonTheme.background)
         .preferredColorScheme(.dark)
+        .onAppear {
+            focusedField = .name
+        }
+        .onChange(of: step) { newStep in
+            if newStep == .name {
+                focusedField = .name
+            }
+        }
     }
 
     private var header: some View {
@@ -83,6 +92,7 @@ struct NewProjectView: View {
             fieldLabel("이름")
             TextField("Baton App", text: $form.name)
                 .textFieldStyle(.plain)
+                .focused($focusedField, equals: .name)
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(BatonTheme.cream)
                 .padding(12)
@@ -90,7 +100,7 @@ struct NewProjectView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(BatonTheme.separator, lineWidth: 1)
+                        .stroke(focusedField == .name ? BatonTheme.amber.opacity(0.85) : BatonTheme.separator, lineWidth: focusedField == .name ? 1.5 : 1)
                 }
         }
     }
@@ -343,4 +353,8 @@ private enum ProjectWizardStep: CaseIterable {
             nil
         }
     }
+}
+
+private enum ProjectFocusField: Hashable {
+    case name
 }
