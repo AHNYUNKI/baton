@@ -3,6 +3,7 @@ import { z } from "zod";
 import { ProjectSchema } from "./project.schema.js";
 import { RunSchema, RunStatusSchema } from "./run.schema.js";
 import { TeamPlanSchema } from "./teamPlan.schema.js";
+import { TeamRunSchema, TeamRunStatusSchema } from "./teamRun.schema.js";
 
 export const READ_API_SCHEMA_VERSION = 1;
 
@@ -22,6 +23,20 @@ export const RunSummaryJsonSchema = z.object({
 export const RunListJsonSchema = z.object({
   runs: z.array(RunSummaryJsonSchema),
   skipped: NonnegativeIntegerSchema
+});
+
+export const TeamRunSummaryJsonSchema = z.object({
+  teamRunId: z.string().min(1),
+  projectId: z.string().min(1),
+  status: TeamRunStatusSchema,
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime().optional(),
+  roleCount: NonnegativeIntegerSchema,
+  completedRoleCount: NonnegativeIntegerSchema
+});
+
+export const TeamRunListJsonSchema = z.object({
+  teamRuns: z.array(TeamRunSummaryJsonSchema)
 });
 
 export const RunDetailJsonSchema = z.object({
@@ -105,6 +120,16 @@ export const TeamPlanEnvelopeSchema = JsonEnvelopeSchema.extend({
   data: TeamPlanSchema
 });
 
+export const TeamRunEnvelopeSchema = JsonEnvelopeSchema.extend({
+  kind: z.literal("team-run"),
+  data: TeamRunSchema
+});
+
+export const TeamRunListEnvelopeSchema = JsonEnvelopeSchema.extend({
+  kind: z.literal("team-run-list"),
+  data: TeamRunListJsonSchema
+});
+
 export const WatchEventEnvelopeSchema = JsonEnvelopeSchema.extend({
   kind: z.literal("event"),
   data: WatchEventSchema
@@ -112,11 +137,15 @@ export const WatchEventEnvelopeSchema = JsonEnvelopeSchema.extend({
 
 export type RunSummaryJson = z.infer<typeof RunSummaryJsonSchema>;
 export type RunListJson = z.infer<typeof RunListJsonSchema>;
+export type TeamRunSummaryJson = z.infer<typeof TeamRunSummaryJsonSchema>;
+export type TeamRunListJson = z.infer<typeof TeamRunListJsonSchema>;
 export type RunDetailJson = z.infer<typeof RunDetailJsonSchema>;
 export type RunStatusCountsJson = z.infer<typeof RunStatusCountsJsonSchema>;
 export type StateJson = z.infer<typeof StateJsonSchema>;
 export type ProjectListJson = z.infer<typeof ProjectListEnvelopeSchema>["data"];
 export type TeamPlanJson = z.infer<typeof TeamPlanEnvelopeSchema>["data"];
+export type TeamRunJson = z.infer<typeof TeamRunEnvelopeSchema>["data"];
+export type TeamRunListEnvelopeJson = z.infer<typeof TeamRunListEnvelopeSchema>["data"];
 export type WatchEvent = z.infer<typeof WatchEventSchema>;
 
 export type JsonEnvelope<TKind extends string = string, TData = unknown> = {

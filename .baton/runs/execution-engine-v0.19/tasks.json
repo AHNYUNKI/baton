@@ -1,0 +1,65 @@
+{
+  "version": "1",
+  "runId": "execution-engine-v0.19",
+  "buildsOn": "org-hierarchy-v0.18.3",
+  "baseBranch": "origin/main",
+  "language": "typescript",
+  "gates": ["pnpm typecheck", "pnpm test", "pnpm build"],
+  "notes": "오케스트레이션 골격(코어+CLI, headless, StubWorker 기본). Swift 모니터/라이브 점등은 v0.19.1. 기존 Run에 결합 금지 — 포트만 재사용.",
+  "tasks": [
+    {
+      "id": "task-E01",
+      "title": "teamRun 스키마 + read API 봉투",
+      "description": "packages/schemas/src/teamRun.schema.ts 신규: TeamRunRoleStatus(planned/running/completed/failed/skipped), TeamRunStatus(planned/awaiting-approval/running/completed/failed/cancelled), TeamRunRoleSchema{roleId,name,assignedAgentId,status,startedAt?,completedAt?,reason?,artifacts?}, TeamRunSchema{id,projectId,status,createdAt,updatedAt?,order:string[],roles[],worktreePath?,baseBranch?,approvals?(ApprovalSchema 재사용)}. index.ts export. readApi.schema.ts: TeamRunEnvelopeSchema(kind 'team-run', data TeamRunSchema), TeamRunListEnvelopeSchema(kind 'team-run-list', data {teamRuns: 요약[]}). 테스트: 스키마 수용/거부, 봉투 round-trip.",
+      "targetFiles": ["packages/schemas/src/teamRun.schema.ts", "packages/schemas/src/readApi.schema.ts", "packages/schemas/src/index.ts", "packages/schemas/test/teamRun.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02", "AC-12"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test"]
+    },
+    {
+      "id": "task-E02",
+      "title": "실행 순서(order.ts, 순수)",
+      "description": "packages/core/src/teamRuns/order.ts: computeExecutionOrder(teamPlan): string[] — reportsTo 위상 정렬(대표 직속 root tier 먼저, BFS로 자식, 형제는 plan 순서). 사이클/미존재 부모는 root 취급(방어), 미방문 잔여는 말미 append. 순수. 테스트: 단일/다단계/형제 순서/사이클 방어/평면.",
+      "targetFiles": ["packages/core/src/teamRuns/order.ts", "packages/core/test/teamRuns/order.test.ts"],
+      "dependencies": ["task-E01"],
+      "acceptanceCriteria": ["AC-03", "AC-04"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-E03",
+      "title": "AgentWorkerRegistry + buildRolePrompt",
+      "description": "packages/core/src/teamRuns/AgentWorkerRegistry.ts: class AgentWorkerRegistry{register(agentId,adapter);resolve(agentId)} + createAgentWorkerRegistry({codex?,claude?,runner?}) 기본 둘 다 StubWorker, opt-in 시 실제 어댑터. 미등록 agentId→StubWorker fallback. packages/core/src/teamRuns/buildRolePrompt.ts: buildRolePrompt({project,role,teamPlan,runDirectory}):string — overview+역할 name/description+instructions(한국어)+산출물 경로. 순수. index export. 테스트: resolve/fallback, 프롬프트에 instructions 포함.",
+      "targetFiles": ["packages/core/src/teamRuns/AgentWorkerRegistry.ts", "packages/core/src/teamRuns/buildRolePrompt.ts", "packages/core/src/index.ts", "packages/core/test/teamRuns/agentWorkerRegistry.test.ts", "packages/core/test/teamRuns/buildRolePrompt.test.ts"],
+      "dependencies": ["task-E01"],
+      "acceptanceCriteria": ["AC-05", "AC-14"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-E04",
+      "title": "TeamRunStore (원자 영속)",
+      "description": "packages/core/src/teamRuns/TeamRunStore.ts: load(id)/save(teamRun)/list(projectId?) — RunStore 패턴(원자 쓰기, .baton/runs/<id>/team-run.json). ArtifactStore와 경로 정합. 테스트: save/load 왕복, 원자성(부분쓰기 없음), list 필터.",
+      "targetFiles": ["packages/core/src/teamRuns/TeamRunStore.ts", "packages/core/test/teamRuns/teamRunStore.test.ts"],
+      "dependencies": ["task-E01"],
+      "acceptanceCriteria": ["AC-12"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-E05",
+      "title": "TeamRunExecutor (start/decide/resume)",
+      "description": "packages/core/src/teamRuns/TeamRunExecutor.ts: 포트 주입{projectService,teamRunStore,artifactStore,worktreeManager,agentWorkerRegistry,clock?,worktreeRoot?,timeoutMs?}. start(projectId,{baseBranch,timeoutMs?}): teamPlan 로드(없으면 오류), order 계산, worktree 생성(실패→failed), TeamRun 생성(roles planned, status awaiting-approval + pending Approval), 저장·반환(승인 전 디스패치 없음). decide(id,{decision,note?}): approved→running+executeFrom, rejected→planned 전부 skipped+cancelled. executeFrom: order 순차 — running+event+저장→resolve(assignedAgentId)→buildRolePrompt→adapter.run({cwd:worktree})→artifacts/event→completed/failed. 실패→잔여 skipped+failed 반환. 전부 성공→completed. resume(id): 첫 비종료 역할부터. 이벤트 teamRun.* (EventLogger). 테스트(mock ProcessRunner/Clock/worktreeManager): 전 전이 + 실패 정지 + reject + resume + worktree 격리.",
+      "targetFiles": ["packages/core/src/teamRuns/TeamRunExecutor.ts", "packages/core/src/index.ts", "packages/core/test/teamRuns/teamRunExecutor.test.ts"],
+      "dependencies": ["task-E02", "task-E03", "task-E04"],
+      "acceptanceCriteria": ["AC-06", "AC-07", "AC-08", "AC-09", "AC-10", "AC-11", "AC-13"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-E06",
+      "title": "CLI: project plan run start/approve/reject/show/list",
+      "description": "packages/cli/src/commands/project.ts: plan run 하위명령 — start <projectId> [--base][--json]→awaiting-approval team-run 봉투, approve <teamRunId> [--note][--json]→진행, reject <teamRunId> [--note][--json]→취소, show <teamRunId> [--json]→team-run 봉투, list <projectId> [--json]→team-run-list 봉투. 기본 워커 stub(--codex/--claude opt-in 자리만). 도움말 갱신. registry.ts에 createAgentWorkerRegistry(필요 시). 테스트: 전 루프(start→approve→completed), reject, show/list, teamPlan 없음 오류.",
+      "targetFiles": ["packages/cli/src/commands/project.ts", "packages/cli/src/registry.ts", "packages/cli/test/project.test.ts"],
+      "dependencies": ["task-E05"],
+      "acceptanceCriteria": ["AC-15", "AC-16"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build"]
+    }
+  ]
+}

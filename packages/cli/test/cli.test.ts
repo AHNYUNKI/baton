@@ -23,9 +23,12 @@ import {
   RunListEnvelopeSchema,
   StateEnvelopeSchema,
   TeamPlanEnvelopeSchema,
+  TeamRunEnvelopeSchema,
+  TeamRunListEnvelopeSchema,
   WatchEventEnvelopeSchema,
   type AgentRole,
-  type Run
+  type Run,
+  type TeamRun
 } from "@baton/schemas";
 
 import { runCli } from "../src/main.js";
@@ -51,6 +54,7 @@ describe("@baton/cli", () => {
     expect(output.join("\n")).toContain("baton db status");
     expect(output.join("\n")).toContain("baton state [--json]");
     expect(output.join("\n")).toContain("baton watch [--interval <s>] [--once]");
+    expect(output.join("\n")).toContain("baton project plan run start");
   });
 
   it("prints db help", async () => {
@@ -413,6 +417,137 @@ describe("@baton/cli", () => {
     output.length = 0;
     expect(await runCli(["project", "plan", "show", projectId, "--json"], { env, stdout: (line) => output.push(line) })).toBe(0);
     expect(TeamPlanEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data).toEqual(plan);
+  });
+
+  it("runs a project TeamPlan through TeamRun start, approve, show, and list using StubWorker", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "baton-cli-home-"));
+    const localDir = await mkdtemp(path.join(tmpdir(), "baton-cli-team-run-"));
+    const env = { ...process.env, BATON_HOME: homeDir };
+    const output: string[] = [];
+    const mock = createMockProcessRunner([{ stdout: "", stderr: "", exitCode: 0, durationMs: 2 }]);
+
+    const projectId = await createProjectWithPlan({ env, cwd: localDir });
+
+    expect(
+      await runCli(["project", "plan", "run", "start", projectId, "--json"], {
+        cwd: localDir,
+        env,
+        runner: mock.runner,
+        clock: fixedClock("2026-06-17T00:00:00.000Z"),
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+
+    const started = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
+    expect(started.status).toBe("awaiting-approval");
+    expect(started.roles.map((role) => role.status)).toEqual(["planned", "planned"]);
+    expect(started.baseBranch).toBe("origin/main");
+    expect(mock.calls).toEqual([
+      {
+        command: "git",
+        args: ["worktree", "add", path.join(localDir, ".baton", "worktrees", started.id), "-b", `baton/${started.id}`, "origin/main"],
+        options: { cwd: localDir }
+      }
+    ]);
+
+    output.length = 0;
+    expect(
+      await runCli(["project", "plan", "run", "approve", started.id, "--note", "go", "--json"], {
+        cwd: localDir,
+        env,
+        runner: mock.runner,
+        clock: fixedClock("2026-06-17T00:00:00.000Z"),
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+
+    const approved = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
+    expect(approved.status).toBe("completed");
+    expect(approved.roles.map((role) => role.status)).toEqual(["completed", "completed"]);
+    expect(approved.roles.every((role) => role.reason === "Completed by stub worker.")).toBe(true);
+    expect(mock.calls.some((call) => call.command === "codex")).toBe(false);
+    expect(mock.calls.some((call) => call.command === "claude")).toBe(false);
+
+    output.length = 0;
+    expect(await runCli(["project", "plan", "run", "show", started.id, "--json"], { cwd: localDir, env, stdout: (line) => output.push(line) })).toBe(0);
+    expect(TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data.status).toBe("completed");
+
+    output.length = 0;
+    expect(await runCli(["project", "plan", "run", "list", projectId, "--json"], { cwd: localDir, env, stdout: (line) => output.push(line) })).toBe(0);
+    const list = TeamRunListEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
+    expect(list.teamRuns).toEqual([
+      {
+        teamRunId: started.id,
+        projectId,
+        status: "completed",
+        createdAt: "2026-06-17T00:00:00.000Z",
+        updatedAt: "2026-06-17T00:00:00.000Z",
+        roleCount: 2,
+        completedRoleCount: 2
+      }
+    ]);
+  });
+
+  it("rejects a project TeamRun before dispatch", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "baton-cli-home-"));
+    const localDir = await mkdtemp(path.join(tmpdir(), "baton-cli-team-run-reject-"));
+    const env = { ...process.env, BATON_HOME: homeDir };
+    const output: string[] = [];
+    const mock = createMockProcessRunner([{ stdout: "", stderr: "", exitCode: 0, durationMs: 2 }]);
+    const projectId = await createProjectWithPlan({ env, cwd: localDir });
+
+    expect(
+      await runCli(["project", "plan", "run", "start", projectId, "--json"], {
+        cwd: localDir,
+        env,
+        runner: mock.runner,
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+    const started = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
+
+    output.length = 0;
+    expect(
+      await runCli(["project", "plan", "run", "reject", started.id, "--note", "stop", "--json"], {
+        cwd: localDir,
+        env,
+        runner: mock.runner,
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+
+    const rejected = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
+    expect(rejected.status).toBe("cancelled");
+    expect(rejected.roles.map((role) => role.status)).toEqual(["skipped", "skipped"]);
+    expect(mock.calls.some((call) => call.command === "codex" || call.command === "claude")).toBe(false);
+  });
+
+  it("fails project plan run start when no TeamPlan is stored", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "baton-cli-home-"));
+    const localDir = await mkdtemp(path.join(tmpdir(), "baton-cli-team-run-missing-plan-"));
+    const env = { ...process.env, BATON_HOME: homeDir };
+    const errors: string[] = [];
+    const mock = createMockProcessRunner();
+
+    expect(
+      await runCli(["project", "create", "--name", "No Plan", "--source-kind", "local", "--source", localDir, "--agent", "codex"], {
+        cwd: localDir,
+        env
+      })
+    ).toBe(0);
+    const projectId = (JSON.parse(await readFile(path.join(homeDir, "projects.json"), "utf8")) as Array<{ id: string }>)[0]?.id ?? "";
+
+    expect(
+      await runCli(["project", "plan", "run", "start", projectId], {
+        cwd: localDir,
+        env,
+        runner: mock.runner,
+        stderr: (line) => errors.push(line)
+      })
+    ).toBe(1);
+
+    expect(errors.join("\n")).toContain(`TeamPlan not found for project: ${projectId}`);
+    expect(mock.calls).toHaveLength(0);
   });
 
   it("fails plan generation before invoking the lead when preflight fails", async () => {
@@ -1937,6 +2072,48 @@ describe("@baton/cli", () => {
 });
 
 type WorkflowStepId = "analyze" | "design" | "implement" | "test" | "review" | "finalize";
+
+async function createProjectWithPlan(options: { env: NodeJS.ProcessEnv; cwd: string }): Promise<string> {
+  expect(
+    await runCli(["project", "create", "--name", "TeamRun Project", "--source-kind", "local", "--source", options.cwd, "--agent", "codex"], {
+      cwd: options.cwd,
+      env: options.env,
+      stdout: () => undefined
+    })
+  ).toBe(0);
+
+  const projectId = (JSON.parse(await readFile(path.join(options.env.BATON_HOME ?? "", "projects.json"), "utf8")) as Array<{ id: string }>)[0]?.id ?? "";
+  const plan = {
+    roles: [
+      {
+        id: "lead",
+        name: "Lead",
+        description: "Coordinates the run.",
+        assignedAgentId: "codex",
+        instructions: "Coordinate safely."
+      },
+      {
+        id: "implementer",
+        name: "Implementer",
+        description: "Implements the run.",
+        assignedAgentId: "codex",
+        instructions: "Implement safely.",
+        reportsTo: "lead"
+      }
+    ]
+  };
+
+  expect(
+    await runCli(["project", "plan", "set", projectId], {
+      cwd: options.cwd,
+      env: options.env,
+      stdin: JSON.stringify(plan),
+      stdout: () => undefined
+    })
+  ).toBe(0);
+
+  return projectId;
+}
 
 async function writeWorkflow(cwd: string, stepIds: WorkflowStepId[]): Promise<void> {
   const workflowsDir = path.join(cwd, "examples", "workflows");
