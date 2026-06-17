@@ -1,7 +1,31 @@
 import { readFile } from "node:fs/promises";
 
-import { ClaudeCodeAdapter, CodexExecAdapter, ProjectService, batonHome, generateTeamPlan, type ProcessRunner, type WorkerAdapter } from "@baton/core";
-import { ProjectSourceKindSchema, TeamPlanEnvelopeSchema, TeamPlanSchema, makeEnvelope, type AgentId, type ProjectSourceKind, type TeamPlan } from "@baton/schemas";
+import {
+  ArtifactStore,
+  ClaudeCodeAdapter,
+  CodexExecAdapter,
+  GitWorktreeManager,
+  ProjectService,
+  TeamRunExecutor,
+  TeamRunStore,
+  batonHome,
+  createAgentWorkerRegistry,
+  generateTeamPlan,
+  type ProcessRunner,
+  type WorkerAdapter
+} from "@baton/core";
+import {
+  ProjectSourceKindSchema,
+  TeamPlanEnvelopeSchema,
+  TeamPlanSchema,
+  makeEnvelope,
+  type AgentId,
+  type ProjectSourceKind,
+  type TeamPlan,
+  type TeamRun,
+  type TeamRunListJson,
+  type TeamRunSummaryJson
+} from "@baton/schemas";
 
 import type { CommandContext, CommandResult } from "./context.js";
 import { checkClaude, checkCodex } from "./doctor.js";
@@ -105,6 +129,28 @@ type ParsedPlanSetArgs = {
   file?: string;
 };
 
+type ParsedPlanRunStartArgs = {
+  projectId: string;
+  baseBranch?: string;
+  json: boolean;
+};
+
+type ParsedPlanRunDecisionArgs = {
+  teamRunId: string;
+  note?: string;
+  json: boolean;
+};
+
+type ParsedPlanRunShowArgs = {
+  teamRunId: string;
+  json: boolean;
+};
+
+type ParsedPlanRunListArgs = {
+  projectId: string;
+  json: boolean;
+};
+
 async function projectPlanCommand(args: readonly string[], context: CommandContext, service: ProjectService): Promise<CommandResult> {
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     context.stdout(projectUsage());
@@ -137,6 +183,10 @@ async function projectPlanCommand(args: readonly string[], context: CommandConte
       return 1;
     }
     return setPlan(parsed, context, service);
+  }
+
+  if (subcommand === "run") {
+    return projectPlanRunCommand(rest, context, service);
   }
 
   context.stderr(projectUsage());
@@ -199,6 +249,129 @@ async function setPlan(args: ParsedPlanSetArgs, context: CommandContext, service
     throw new Error(`TeamPlan was not stored for project: ${args.projectId}`);
   }
   context.stdout(JSON.stringify(makeEnvelope("team-plan", savedProject.teamPlan), null, 2));
+  return 0;
+}
+
+async function projectPlanRunCommand(args: readonly string[], context: CommandContext, service: ProjectService): Promise<CommandResult> {
+  if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
+    context.stdout(projectUsage());
+    return 0;
+  }
+
+  const [subcommand, ...rest] = args;
+  if (subcommand === "start") {
+    const parsed = parsePlanRunStartArgs(rest);
+    if (parsed === undefined) {
+      context.stderr(projectUsage());
+      return 1;
+    }
+    return startTeamRun(parsed, context, service);
+  }
+
+  if (subcommand === "approve") {
+    const parsed = parsePlanRunDecisionArgs(rest);
+    if (parsed === undefined) {
+      context.stderr(projectUsage());
+      return 1;
+    }
+    return decideTeamRun(parsed, "approved", context, service);
+  }
+
+  if (subcommand === "reject") {
+    const parsed = parsePlanRunDecisionArgs(rest);
+    if (parsed === undefined) {
+      context.stderr(projectUsage());
+      return 1;
+    }
+    return decideTeamRun(parsed, "rejected", context, service);
+  }
+
+  if (subcommand === "show") {
+    const parsed = parsePlanRunShowArgs(rest);
+    if (parsed === undefined) {
+      context.stderr(projectUsage());
+      return 1;
+    }
+    return showTeamRun(parsed, context);
+  }
+
+  if (subcommand === "list") {
+    const parsed = parsePlanRunListArgs(rest);
+    if (parsed === undefined) {
+      context.stderr(projectUsage());
+      return 1;
+    }
+    return listTeamRuns(parsed, context, service);
+  }
+
+  context.stderr(projectUsage());
+  return 1;
+}
+
+async function startTeamRun(args: ParsedPlanRunStartArgs, context: CommandContext, service: ProjectService): Promise<CommandResult> {
+  const { executor } = createTeamRunExecutor(context, service);
+  const result = await executor.start(args.projectId, args.baseBranch === undefined ? {} : { baseBranch: args.baseBranch });
+
+  printTeamRunResult(result.teamRun, args.json, context);
+  return result.outcome === "failed" || result.outcome === "cancelled" ? 1 : 0;
+}
+
+async function decideTeamRun(
+  args: ParsedPlanRunDecisionArgs,
+  decision: "approved" | "rejected",
+  context: CommandContext,
+  service: ProjectService
+): Promise<CommandResult> {
+  const { executor } = createTeamRunExecutor(context, service);
+  const result = await executor.decide(args.teamRunId, {
+    decision,
+    ...(args.note === undefined ? {} : { note: args.note })
+  });
+
+  printTeamRunResult(result.teamRun, args.json, context);
+  return result.outcome === "failed" ? 1 : 0;
+}
+
+async function showTeamRun(args: ParsedPlanRunShowArgs, context: CommandContext): Promise<CommandResult> {
+  const store = new TeamRunStore({
+    artifactStore: new ArtifactStore({ workspaceRoot: context.cwd }),
+    clock: context.clock
+  });
+  const teamRun = await store.load(args.teamRunId);
+
+  printTeamRunResult(teamRun, args.json, context);
+  return 0;
+}
+
+async function listTeamRuns(args: ParsedPlanRunListArgs, context: CommandContext, service: ProjectService): Promise<CommandResult> {
+  const project = await service.get(args.projectId);
+  if (project === undefined) {
+    context.stderr(`Project not found: ${args.projectId}`);
+    return 1;
+  }
+
+  const store = new TeamRunStore({
+    artifactStore: new ArtifactStore({ workspaceRoot: context.cwd }),
+    clock: context.clock
+  });
+  const teamRuns = await store.list(args.projectId);
+  const data: TeamRunListJson = {
+    teamRuns: teamRuns.map(toTeamRunSummaryJson)
+  };
+
+  if (args.json) {
+    context.stdout(JSON.stringify(makeEnvelope("team-run-list", data), null, 2));
+    return 0;
+  }
+
+  if (data.teamRuns.length === 0) {
+    context.stdout(`TeamRun이 없습니다: ${args.projectId}`);
+    return 0;
+  }
+
+  for (const summary of data.teamRuns) {
+    context.stdout(`${summary.teamRunId}\t${summary.status}\t${summary.completedRoleCount}/${summary.roleCount}\t${summary.createdAt}`);
+  }
   return 0;
 }
 
@@ -385,6 +558,162 @@ function parsePlanSetArgs(args: readonly string[]): ParsedPlanSetArgs | undefine
   return file === undefined ? { projectId } : { projectId, file };
 }
 
+function parsePlanRunStartArgs(args: readonly string[]): ParsedPlanRunStartArgs | undefined {
+  const projectId = args[0];
+  if (projectId === undefined || projectId.trim().length === 0) {
+    return undefined;
+  }
+
+  let baseBranch: string | undefined;
+  let json = false;
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--base") {
+      baseBranch = args[index + 1];
+      if (baseBranch === undefined || baseBranch.trim().length === 0) {
+        return undefined;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
+
+    return undefined;
+  }
+
+  return {
+    projectId,
+    json,
+    ...(baseBranch === undefined ? {} : { baseBranch })
+  };
+}
+
+function parsePlanRunDecisionArgs(args: readonly string[]): ParsedPlanRunDecisionArgs | undefined {
+  const teamRunId = args[0];
+  if (teamRunId === undefined || teamRunId.trim().length === 0) {
+    return undefined;
+  }
+
+  let note: string | undefined;
+  let json = false;
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--note") {
+      note = args[index + 1];
+      if (note === undefined || note.trim().length === 0) {
+        return undefined;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
+
+    return undefined;
+  }
+
+  return {
+    teamRunId,
+    json,
+    ...(note === undefined ? {} : { note })
+  };
+}
+
+function parsePlanRunShowArgs(args: readonly string[]): ParsedPlanRunShowArgs | undefined {
+  const teamRunId = args[0];
+  if (teamRunId === undefined || teamRunId.trim().length === 0) {
+    return undefined;
+  }
+
+  let json = false;
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
+    return undefined;
+  }
+
+  return { teamRunId, json };
+}
+
+function parsePlanRunListArgs(args: readonly string[]): ParsedPlanRunListArgs | undefined {
+  const projectId = args[0];
+  if (projectId === undefined || projectId.trim().length === 0) {
+    return undefined;
+  }
+
+  let json = false;
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
+    return undefined;
+  }
+
+  return { projectId, json };
+}
+
+function createTeamRunExecutor(context: CommandContext, projectService: ProjectService): { executor: TeamRunExecutor } {
+  const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
+  const { registry } = createAgentWorkerRegistry();
+
+  return {
+    executor: new TeamRunExecutor({
+      projectService,
+      teamRunStore: new TeamRunStore({ artifactStore, clock: context.clock }),
+      artifactStore,
+      worktreeManager: new GitWorktreeManager({ runner: context.runner, repoRoot: context.cwd }),
+      agentWorkerRegistry: registry,
+      clock: context.clock
+    })
+  };
+}
+
+function printTeamRunResult(teamRun: TeamRun, json: boolean, context: CommandContext): void {
+  if (json) {
+    context.stdout(JSON.stringify(makeEnvelope("team-run", teamRun), null, 2));
+    return;
+  }
+
+  context.stdout(`TeamRun ${teamRun.id} ${teamRun.status}`);
+  context.stdout(`Project: ${teamRun.projectId}`);
+  if (teamRun.baseBranch !== undefined) {
+    context.stdout(`Base: ${teamRun.baseBranch}`);
+  }
+  if (teamRun.worktreePath !== undefined) {
+    context.stdout(`Worktree: ${teamRun.worktreePath}`);
+  }
+  for (const role of teamRun.roles) {
+    context.stdout(`- ${role.roleId}: ${role.name} (${role.status})${role.reason === undefined ? "" : ` - ${role.reason}`}`);
+  }
+  if (teamRun.status === "awaiting-approval") {
+    context.stdout(`승인 대기: baton project plan run approve ${teamRun.id}`);
+  }
+}
+
+function toTeamRunSummaryJson(teamRun: TeamRun): TeamRunSummaryJson {
+  return {
+    teamRunId: teamRun.id,
+    projectId: teamRun.projectId,
+    status: teamRun.status,
+    createdAt: teamRun.createdAt,
+    ...(teamRun.updatedAt === undefined ? {} : { updatedAt: teamRun.updatedAt }),
+    roleCount: teamRun.roles.length,
+    completedRoleCount: teamRun.roles.filter((role) => role.status === "completed").length
+  };
+}
+
 function projectUsage(): string {
   return [
     "Usage:",
@@ -393,6 +722,11 @@ function projectUsage(): string {
     "  baton project list [--json]",
     "  baton project plan generate <projectId> --overview <text>",
     "  baton project plan show <projectId> [--json]",
-    "  baton project plan set <projectId> [--file <path>]"
+    "  baton project plan set <projectId> [--file <path>]",
+    "  baton project plan run start <projectId> [--base <branch>] [--json]",
+    "  baton project plan run approve <teamRunId> [--note <text>] [--json]",
+    "  baton project plan run reject <teamRunId> [--note <text>] [--json]",
+    "  baton project plan run show <teamRunId> [--json]",
+    "  baton project plan run list <projectId> [--json]"
   ].join("\n");
 }

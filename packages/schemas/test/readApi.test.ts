@@ -7,7 +7,10 @@ import {
   WatchEventEnvelopeSchema,
   WatchEventSchema,
   makeEnvelope,
-  type RunSummaryJson
+  TeamRunEnvelopeSchema,
+  TeamRunListEnvelopeSchema,
+  type RunSummaryJson,
+  type TeamRun
 } from "../src/index.js";
 
 describe("read API schemas", () => {
@@ -47,6 +50,32 @@ describe("read API schemas", () => {
     ]);
 
     expect(ProjectListEnvelopeSchema.parse(envelope).data).toHaveLength(1);
+  });
+
+  it("validates team-run and team-run-list envelopes", () => {
+    const teamRun = teamRunFixture();
+    const summary = {
+      teamRunId: teamRun.id,
+      projectId: teamRun.projectId,
+      status: teamRun.status,
+      createdAt: teamRun.createdAt,
+      updatedAt: teamRun.updatedAt,
+      roleCount: teamRun.roles.length,
+      completedRoleCount: 0
+    };
+
+    expect(TeamRunEnvelopeSchema.parse(makeEnvelope("team-run", teamRun))).toEqual({
+      schemaVersion: 1,
+      kind: "team-run",
+      data: teamRun
+    });
+    expect(TeamRunListEnvelopeSchema.parse(makeEnvelope("team-run-list", { teamRuns: [summary] }))).toEqual({
+      schemaVersion: 1,
+      kind: "team-run-list",
+      data: { teamRuns: [summary] }
+    });
+    expect(TeamRunEnvelopeSchema.safeParse(makeEnvelope("team-run", { ...teamRun, status: "waiting" })).success).toBe(false);
+    expect(TeamRunListEnvelopeSchema.safeParse(makeEnvelope("team-run-list", { teamRuns: [{ ...summary, roleCount: -1 }] })).success).toBe(false);
   });
 
   it("validates watch events and event envelopes", () => {
@@ -101,5 +130,24 @@ function runSummaryFixture(overrides: Partial<RunSummaryJson> = {}): RunSummaryJ
     updatedAt: "2026-06-15T00:00:00.000Z",
     stepCount: 1,
     ...overrides
+  };
+}
+
+function teamRunFixture(): TeamRun {
+  return {
+    id: "team-run-1",
+    projectId: "project-1",
+    status: "awaiting-approval",
+    createdAt: "2026-06-17T00:00:00.000Z",
+    updatedAt: "2026-06-17T00:00:01.000Z",
+    order: ["lead"],
+    roles: [
+      {
+        roleId: "lead",
+        name: "Lead",
+        assignedAgentId: "claude",
+        status: "planned"
+      }
+    ]
   };
 }
