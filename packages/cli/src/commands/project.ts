@@ -11,8 +11,13 @@ import {
   aggregateTeamRunUsage,
   batonHome,
   createAgentWorkerRegistry,
+  createTeamRunDispatchConfig,
   generateTeamPlan,
+  readTeamRunDispatchConfig,
+  shouldPersistTeamRunDispatchConfig,
+  writeTeamRunDispatchConfig,
   type ProcessRunner,
+  type TeamRunDispatchConfig,
   type WorkerAdapter
 } from "@baton/core";
 import {
@@ -133,6 +138,9 @@ type ParsedPlanSetArgs = {
 type ParsedPlanRunStartArgs = {
   projectId: string;
   baseBranch?: string;
+  codex: boolean;
+  claude: boolean;
+  timeoutMs?: number;
   json: boolean;
 };
 
@@ -151,6 +159,8 @@ type ParsedPlanRunListArgs = {
   projectId: string;
   json: boolean;
 };
+
+const defaultRealDispatchTimeoutMs = 10 * 60 * 1000;
 
 async function projectPlanCommand(args: readonly string[], context: CommandContext, service: ProjectService): Promise<CommandResult> {
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
@@ -310,8 +320,17 @@ async function projectPlanRunCommand(args: readonly string[], context: CommandCo
 }
 
 async function startTeamRun(args: ParsedPlanRunStartArgs, context: CommandContext, service: ProjectService): Promise<CommandResult> {
-  const { executor } = createTeamRunExecutor(context, service);
+  const dispatchConfig = dispatchConfigFromStartArgs(args);
+  const preflight = await preflightTeamRunWorkers(dispatchConfig, context);
+  if (preflight !== 0) {
+    return preflight;
+  }
+
+  const { executor, artifactStore } = createTeamRunExecutor(context, service, dispatchConfig);
   const result = await executor.start(args.projectId, args.baseBranch === undefined ? {} : { baseBranch: args.baseBranch });
+  if (result.outcome !== "failed" && shouldPersistTeamRunDispatchConfig(dispatchConfig)) {
+    await writeTeamRunDispatchConfig(artifactStore, result.teamRun.id, dispatchConfig);
+  }
 
   printTeamRunResult(result.teamRun, args.json, context);
   return result.outcome === "failed" || result.outcome === "cancelled" ? 1 : 0;
@@ -323,7 +342,16 @@ async function decideTeamRun(
   context: CommandContext,
   service: ProjectService
 ): Promise<CommandResult> {
-  const { executor } = createTeamRunExecutor(context, service);
+  const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
+  const dispatchConfig = decision === "approved" ? await readTeamRunDispatchConfig(artifactStore, args.teamRunId) : undefined;
+  if (dispatchConfig !== undefined) {
+    const preflight = await preflightTeamRunWorkers(dispatchConfig, context);
+    if (preflight !== 0) {
+      return preflight;
+    }
+  }
+
+  const { executor } = createTeamRunExecutor(context, service, dispatchConfig);
   const result = await executor.decide(args.teamRunId, {
     decision,
     ...(args.note === undefined ? {} : { note: args.note })
@@ -410,6 +438,37 @@ function createLeadAdapter(agentId: AgentId, runner: ProcessRunner): WorkerAdapt
   return agentId === "codex" ? new CodexExecAdapter({ runner, sandbox: "read-only" }) : new ClaudeCodeAdapter({ runner });
 }
 
+function dispatchConfigFromStartArgs(args: ParsedPlanRunStartArgs): TeamRunDispatchConfig {
+  const timeoutMs = args.timeoutMs ?? (args.codex || args.claude ? defaultRealDispatchTimeoutMs : undefined);
+  return createTeamRunDispatchConfig({
+    codex: args.codex,
+    claude: args.claude,
+    ...(timeoutMs === undefined ? {} : { timeoutMs })
+  });
+}
+
+async function preflightTeamRunWorkers(config: TeamRunDispatchConfig, context: CommandContext): Promise<CommandResult> {
+  if (config.workers.codex) {
+    const result = await checkCodex(context.runner, { cwd: context.cwd });
+    if (!result.available) {
+      const prefix = result.reason === "not-installed" ? "Codex not installed or not on PATH" : "Codex command returned an error";
+      context.stderr(`${prefix}: ${result.message}`);
+      return 1;
+    }
+  }
+
+  if (config.workers.claude) {
+    const result = await checkClaude(context.runner, { cwd: context.cwd });
+    if (!result.available) {
+      const prefix = result.reason === "not-installed" ? "Claude not installed or not on PATH" : "Claude command returned an error";
+      context.stderr(`${prefix}: ${result.message}`);
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
 function parseProjectCreateArgs(args: readonly string[]): ParsedProjectCreateArgs | undefined {
   let name: string | undefined;
   let sourceKind: ProjectSourceKind | undefined;
@@ -478,6 +537,14 @@ function parseProjectCreateArgs(args: readonly string[]): ParsedProjectCreateArg
     agentIds,
     ...(leadAgentId === undefined ? {} : { leadAgentId })
   };
+}
+
+function parsePositiveInteger(value: string | undefined): number | undefined {
+  if (value === undefined || !/^\d+$/.test(value)) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function parseProjectListArgs(args: readonly string[]): ParsedProjectListArgs | undefined {
@@ -566,12 +633,34 @@ function parsePlanRunStartArgs(args: readonly string[]): ParsedPlanRunStartArgs 
   }
 
   let baseBranch: string | undefined;
+  let codex = false;
+  let claude = false;
+  let timeoutMs: number | undefined;
   let json = false;
   for (let index = 1; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--base") {
       baseBranch = args[index + 1];
       if (baseBranch === undefined || baseBranch.trim().length === 0) {
+        return undefined;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--codex") {
+      codex = true;
+      continue;
+    }
+
+    if (arg === "--claude") {
+      claude = true;
+      continue;
+    }
+
+    if (arg === "--timeout-ms") {
+      timeoutMs = parsePositiveInteger(args[index + 1]);
+      if (timeoutMs === undefined) {
         return undefined;
       }
       index += 1;
@@ -588,8 +677,11 @@ function parsePlanRunStartArgs(args: readonly string[]): ParsedPlanRunStartArgs 
 
   return {
     projectId,
+    codex,
+    claude,
     json,
-    ...(baseBranch === undefined ? {} : { baseBranch })
+    ...(baseBranch === undefined ? {} : { baseBranch }),
+    ...(timeoutMs === undefined ? {} : { timeoutMs })
   };
 }
 
@@ -665,18 +757,28 @@ function parsePlanRunListArgs(args: readonly string[]): ParsedPlanRunListArgs | 
   return { projectId, json };
 }
 
-function createTeamRunExecutor(context: CommandContext, projectService: ProjectService): { executor: TeamRunExecutor } {
+function createTeamRunExecutor(
+  context: CommandContext,
+  projectService: ProjectService,
+  dispatchConfig?: TeamRunDispatchConfig
+): { executor: TeamRunExecutor; artifactStore: ArtifactStore } {
   const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
-  const { registry } = createAgentWorkerRegistry();
+  const { registry } = createAgentWorkerRegistry({
+    codex: dispatchConfig?.workers.codex === true,
+    claude: dispatchConfig?.workers.claude === true,
+    runner: context.runner
+  });
 
   return {
+    artifactStore,
     executor: new TeamRunExecutor({
       projectService,
       teamRunStore: new TeamRunStore({ artifactStore, clock: context.clock }),
       artifactStore,
       worktreeManager: new GitWorktreeManager({ runner: context.runner, repoRoot: context.cwd }),
       agentWorkerRegistry: registry,
-      clock: context.clock
+      clock: context.clock,
+      ...(dispatchConfig?.timeoutMs === undefined ? {} : { timeoutMs: dispatchConfig.timeoutMs })
     })
   };
 }
@@ -745,7 +847,7 @@ function projectUsage(): string {
     "  baton project plan generate <projectId> --overview <text>",
     "  baton project plan show <projectId> [--json]",
     "  baton project plan set <projectId> [--file <path>]",
-    "  baton project plan run start <projectId> [--base <branch>] [--json]",
+    "  baton project plan run start <projectId> [--base <branch>] [--codex] [--claude] [--timeout-ms <ms>] [--json]",
     "  baton project plan run approve <teamRunId> [--note <text>] [--json]",
     "  baton project plan run reject <teamRunId> [--note <text>] [--json]",
     "  baton project plan run show <teamRunId> [--json]",

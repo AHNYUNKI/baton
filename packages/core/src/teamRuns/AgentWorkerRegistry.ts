@@ -9,6 +9,7 @@ export type AgentWorkerRegistryOptions = {
   claude?: boolean;
   runner?: ProcessRunner;
   fallback?: WorkerAdapter;
+  readOnly?: boolean;
 };
 
 export type AgentWorkerRegistryResult = {
@@ -43,12 +44,18 @@ export function createAgentWorkerRegistry({
   codex = false,
   claude = false,
   runner,
-  fallback = new StubWorker()
+  fallback = new StubWorker(),
+  readOnly = true
 }: AgentWorkerRegistryOptions = {}): AgentWorkerRegistryResult {
-  const registry = new AgentWorkerRegistry(fallback);
+  if (!readOnly && (codex || claude)) {
+    throw new Error("TeamRun real dispatch only supports read-only worker adapters.");
+  }
 
-  registry.register("codex", codex ? new CodexExecAdapter(runner === undefined ? {} : { runner }) : new StubWorker());
-  registry.register("claude", claude ? new ClaudeCodeAdapter(runner === undefined ? {} : { runner }) : new StubWorker());
+  const registry = new AgentWorkerRegistry(fallback);
+  const runnerOption = runner === undefined ? {} : { runner };
+
+  registry.register("codex", codex ? new CodexExecAdapter({ ...runnerOption, sandbox: "read-only" }) : new StubWorker());
+  registry.register("claude", claude ? new ClaudeCodeAdapter({ ...runnerOption, readOnly: true, outputFormat: "json" }) : new StubWorker());
 
   return {
     registry,

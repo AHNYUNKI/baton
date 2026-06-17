@@ -28,6 +28,7 @@ import {
   WatchEventEnvelopeSchema,
   type AgentRole,
   type Run,
+  type TeamPlan,
   type TeamRun
 } from "@baton/schemas";
 
@@ -503,6 +504,177 @@ describe("@baton/cli", () => {
         completedRoleCount: 2
       }
     ]);
+  });
+
+  it("runs opted-in TeamRun workers through read-only codex and claude adapters after approval", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "baton-cli-home-"));
+    const localDir = await mkdtemp(path.join(tmpdir(), "baton-cli-team-run-real-"));
+    const env = { ...process.env, BATON_HOME: homeDir };
+    const output: string[] = [];
+    const mock = createMockProcessRunner([
+      { stdout: "codex 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "claude 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "", stderr: "", exitCode: 0, durationMs: 2 },
+      { stdout: "codex 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "claude 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "codex result", stderr: "", exitCode: 0, durationMs: 20 },
+      {
+        stdout: JSON.stringify({ result: "claude result", usage: { input_tokens: 11, output_tokens: 7 } }),
+        stderr: "",
+        exitCode: 0,
+        durationMs: 30
+      }
+    ]);
+    const plan: TeamPlan = {
+      roles: [
+        {
+          id: "lead",
+          name: "Lead",
+          description: "Coordinates the run.",
+          assignedAgentId: "codex",
+          instructions: "Coordinate safely."
+        },
+        {
+          id: "reviewer",
+          name: "Reviewer",
+          description: "Reviews the plan.",
+          assignedAgentId: "claude",
+          instructions: "Review safely.",
+          reportsTo: "lead"
+        }
+      ]
+    };
+    const projectId = await createProjectWithPlan({ env, cwd: localDir, agents: ["codex", "claude"], plan });
+
+    expect(
+      await runCli(["project", "plan", "run", "start", projectId, "--codex", "--claude", "--timeout-ms", "1234", "--json"], {
+        cwd: localDir,
+        env,
+        runner: mock.runner,
+        clock: fixedClock("2026-06-17T00:00:00.000Z"),
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+
+    const started = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
+    expect(mock.calls.slice(0, 3)).toEqual([
+      { command: "codex", args: ["--version"], options: { cwd: localDir, timeoutMs: 5000 } },
+      { command: "claude", args: ["--version"], options: { cwd: localDir, timeoutMs: 5000 } },
+      {
+        command: "git",
+        args: ["worktree", "add", path.join(localDir, ".baton", "worktrees", started.id), "-b", `baton/${started.id}`, "origin/main"],
+        options: { cwd: localDir }
+      }
+    ]);
+    expect(JSON.parse(await readFile(path.join(localDir, ".baton", "runs", started.id, "team-run-dispatch.json"), "utf8"))).toEqual({
+      version: 1,
+      workers: { codex: true, claude: true },
+      timeoutMs: 1234
+    });
+
+    output.length = 0;
+    expect(
+      await runCli(["project", "plan", "run", "approve", started.id, "--json"], {
+        cwd: localDir,
+        env,
+        runner: mock.runner,
+        clock: fixedClock("2026-06-17T00:00:00.000Z"),
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+
+    const approved = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
+    expect(approved.status).toBe("completed");
+    expect(approved.roles.map((role) => [role.roleId, role.status])).toEqual([
+      ["lead", "completed"],
+      ["reviewer", "completed"]
+    ]);
+    expect(approved.roles.find((role) => role.roleId === "lead")?.usage?.estimated).toBe(true);
+    expect(approved.roles.find((role) => role.roleId === "reviewer")?.usage).toEqual({
+      inputTokens: 11,
+      outputTokens: 7,
+      estimated: false
+    });
+
+    const approveCalls = mock.calls.slice(3);
+    expect(approveCalls[0]).toEqual({ command: "codex", args: ["--version"], options: { cwd: localDir, timeoutMs: 5000 } });
+    expect(approveCalls[1]).toEqual({ command: "claude", args: ["--version"], options: { cwd: localDir, timeoutMs: 5000 } });
+    const codexExecCall = approveCalls.find((call) => call.command === "codex" && call.args[0] === "exec");
+    expect(codexExecCall?.args).toEqual(["exec", "--sandbox", "read-only"]);
+    expect(codexExecCall?.options).toMatchObject({ cwd: started.worktreePath, timeoutMs: 1234 });
+    const claudeCall = approveCalls.find((call) => call.command === "claude" && call.args.includes("--output-format"));
+    expect(claudeCall?.args).toEqual(["--print", "--permission-mode", "plan", "--output-format", "json"]);
+    expect(claudeCall?.options).toMatchObject({ cwd: started.worktreePath, timeoutMs: 1234 });
+  });
+
+  it("fails TeamRun start before creating a worktree when opted-in preflight fails", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "baton-cli-home-"));
+    const localDir = await mkdtemp(path.join(tmpdir(), "baton-cli-team-run-preflight-"));
+    const env = { ...process.env, BATON_HOME: homeDir };
+    const errors: string[] = [];
+    const mock = createMockProcessRunner([{ stdout: "", stderr: "missing", exitCode: 1, durationMs: 1 }]);
+    const projectId = await createProjectWithPlan({ env, cwd: localDir });
+
+    expect(
+      await runCli(["project", "plan", "run", "start", projectId, "--codex"], {
+        cwd: localDir,
+        env,
+        runner: mock.runner,
+        stderr: (line) => errors.push(line)
+      })
+    ).toBe(1);
+
+    expect(errors.join("\n")).toContain("Codex command returned an error");
+    expect(mock.calls).toEqual([{ command: "codex", args: ["--version"], options: { cwd: localDir, timeoutMs: 5000 } }]);
+    await expect(readdir(path.join(localDir, ".baton", "worktrees"))).rejects.toThrow();
+  });
+
+  it("fails TeamRun approval before dispatch when stored opt-in preflight fails", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "baton-cli-home-"));
+    const localDir = await mkdtemp(path.join(tmpdir(), "baton-cli-team-run-approve-preflight-"));
+    const env = { ...process.env, BATON_HOME: homeDir };
+    const output: string[] = [];
+    const errors: string[] = [];
+    const mock = createMockProcessRunner([
+      { stdout: "claude 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "", stderr: "missing", exitCode: 1, durationMs: 1 }
+    ]);
+    const plan: TeamPlan = {
+      roles: [
+        {
+          id: "reviewer",
+          name: "Reviewer",
+          description: "Reviews the plan.",
+          assignedAgentId: "claude",
+          instructions: "Review safely."
+        }
+      ]
+    };
+    const projectId = await createProjectWithPlan({ env, cwd: localDir, agents: ["claude"], plan });
+
+    expect(
+      await runCli(["project", "plan", "run", "start", projectId, "--claude", "--json"], {
+        cwd: localDir,
+        env,
+        runner: mock.runner,
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+    const started = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
+
+    expect(
+      await runCli(["project", "plan", "run", "approve", started.id, "--json"], {
+        cwd: localDir,
+        env,
+        runner: mock.runner,
+        stdout: (line) => output.push(line),
+        stderr: (line) => errors.push(line)
+      })
+    ).toBe(1);
+
+    expect(errors.join("\n")).toContain("Claude command returned an error");
+    expect(mock.calls.filter((call) => call.command === "claude" && call.args.includes("--output-format"))).toHaveLength(0);
   });
 
   it("rejects a project TeamRun before dispatch", async () => {
@@ -2090,17 +2262,33 @@ describe("@baton/cli", () => {
 
 type WorkflowStepId = "analyze" | "design" | "implement" | "test" | "review" | "finalize";
 
-async function createProjectWithPlan(options: { env: NodeJS.ProcessEnv; cwd: string }): Promise<string> {
+async function createProjectWithPlan(options: { env: NodeJS.ProcessEnv; cwd: string; agents?: readonly string[]; plan?: TeamPlan }): Promise<string> {
+  const agents = options.agents ?? ["codex"];
+  const leadArgs = agents.length > 1 ? ["--lead", agents[0] ?? ""] : [];
   expect(
-    await runCli(["project", "create", "--name", "TeamRun Project", "--source-kind", "local", "--source", options.cwd, "--agent", "codex"], {
-      cwd: options.cwd,
-      env: options.env,
-      stdout: () => undefined
-    })
+    await runCli(
+      [
+        "project",
+        "create",
+        "--name",
+        "TeamRun Project",
+        "--source-kind",
+        "local",
+        "--source",
+        options.cwd,
+        ...agents.flatMap((agent) => ["--agent", agent]),
+        ...leadArgs
+      ],
+      {
+        cwd: options.cwd,
+        env: options.env,
+        stdout: () => undefined
+      }
+    )
   ).toBe(0);
 
   const projectId = (JSON.parse(await readFile(path.join(options.env.BATON_HOME ?? "", "projects.json"), "utf8")) as Array<{ id: string }>)[0]?.id ?? "";
-  const plan = {
+  const plan = options.plan ?? {
     roles: [
       {
         id: "lead",

@@ -36,6 +36,7 @@ export * from "./runs/detectRunChanges.js";
 export * from "./teamRuns/AgentWorkerRegistry.js";
 export * from "./teamRuns/buildRolePrompt.js";
 export * from "./teamRuns/collectUpstream.js";
+export * from "./teamRuns/dispatchConfig.js";
 export * from "./teamRuns/order.js";
 export * from "./teamRuns/summarizeResult.js";
 export * from "./teamRuns/usage.js";
