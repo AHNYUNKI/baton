@@ -24,6 +24,7 @@ export type CliOptions = {
   stderr?: WriteLine;
   runner?: CommandContext["runner"];
   clock?: Clock;
+  stdin?: string;
 };
 
 export async function runCli(argv: readonly string[], options: CliOptions = {}): Promise<number> {
@@ -35,7 +36,8 @@ export async function runCli(argv: readonly string[], options: CliOptions = {}):
     stdout,
     stderr,
     runner: options.runner ?? createNodeProcessRunner(),
-    clock: options.clock ?? systemClock
+    clock: options.clock ?? systemClock,
+    readStdin: options.stdin === undefined ? readProcessStdin : async () => options.stdin ?? ""
   };
 
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
@@ -90,6 +92,9 @@ export function usage(): string {
     "  baton project create --name <name> --source-kind <local|github> --source <value> --agent <id> [--agent <id> ...] [--lead <id>]",
     "  baton project add <path>",
     "  baton project list [--json]",
+    "  baton project plan generate <projectId> --overview <text>",
+    "  baton project plan show <projectId> [--json]",
+    "  baton project plan set <projectId> [--file <path>]",
     "  baton config list",
     "  baton config get <dotted.key>",
     "  baton config set <dotted.key> <value>",
@@ -120,4 +125,12 @@ function isEntrypoint(): boolean {
 
 if (isEntrypoint()) {
   process.exitCode = await runCli(process.argv.slice(2));
+}
+
+async function readProcessStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }

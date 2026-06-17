@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { ProjectSchema } from "./project.schema.js";
 import { RunSchema, RunStatusSchema } from "./run.schema.js";
+import { TeamPlanSchema } from "./teamPlan.schema.js";
 
 export const READ_API_SCHEMA_VERSION = 1;
 
@@ -99,6 +100,11 @@ export const ProjectListEnvelopeSchema = JsonEnvelopeSchema.extend({
   data: z.array(ProjectSchema)
 });
 
+export const TeamPlanEnvelopeSchema = JsonEnvelopeSchema.extend({
+  kind: z.literal("team-plan"),
+  data: TeamPlanSchema
+});
+
 export const WatchEventEnvelopeSchema = JsonEnvelopeSchema.extend({
   kind: z.literal("event"),
   data: WatchEventSchema
@@ -110,6 +116,7 @@ export type RunDetailJson = z.infer<typeof RunDetailJsonSchema>;
 export type RunStatusCountsJson = z.infer<typeof RunStatusCountsJsonSchema>;
 export type StateJson = z.infer<typeof StateJsonSchema>;
 export type ProjectListJson = z.infer<typeof ProjectListEnvelopeSchema>["data"];
+export type TeamPlanJson = z.infer<typeof TeamPlanEnvelopeSchema>["data"];
 export type WatchEvent = z.infer<typeof WatchEventSchema>;
 
 export type JsonEnvelope<TKind extends string = string, TData = unknown> = {

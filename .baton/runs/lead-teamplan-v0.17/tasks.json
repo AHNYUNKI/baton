@@ -1,0 +1,55 @@
+{
+  "version": "1",
+  "runId": "lead-teamplan-v0.17",
+  "buildsOn": "project-create-v0.16",
+  "baseBranch": "origin/main",
+  "languages": ["typescript", "swift"],
+  "gates": ["pnpm typecheck", "pnpm test", "pnpm build", "swift build", "swift test"],
+  "tasks": [
+    {
+      "id": "task-L01",
+      "title": "core: TeamPlan 스키마 + Project additive",
+      "description": "packages/schemas/src/teamPlan.schema.ts: TeamRole{ id(min1), name(trim min1), description(string), assignedAgentId(string min1), instructions(string) }, TeamPlan{ roles: TeamRole[].min(1) } + superRefine(역할 id 유일). project.schema.ts: optional overview?(string), teamPlan?(TeamPlan) additive. 별도 검증 헬퍼 assertPlanAgents(plan, agentIds): 모든 assignedAgentId ∈ agentIds. index re-export. 테스트: 유효/무효(중복 id, 빈 roles/이름, 담당AI 밖), Project additive 호환.",
+      "targetFiles": ["packages/schemas/src/teamPlan.schema.ts", "packages/schemas/src/project.schema.ts", "packages/schemas/src/index.ts", "packages/schemas/test/teamPlan.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02", "AC-03"],
+      "testCommands": ["corepack pnpm --filter @baton/schemas test"]
+    },
+    {
+      "id": "task-L02",
+      "title": "core: planner (generate, bounded retry, parse/clamp)",
+      "description": "packages/core/src/projects/planner.ts: buildPlanPrompt(overview, agentIds, previousError?)=대표에게 개요+사용가능 AI 주고 TeamPlan을 엄격 JSON으로 출력하라는 프롬프트. extractJson(stdout)=관대 추출(코드펜스 ```json/첫 {..} 균형 파싱). generateTeamPlan({project, overview, leadAdapter, maxAttempts=2}): while(attempts<max){ attempts++; out=leadAdapter.run({cwd, prompt}); json=extractJson; parsed=TeamPlanSchema.safeParse; if ok return clampAssignedAgents(parsed, project.agentIds); else 교정 prompt } 상한 소진 시 throw 명확한 에러. clampAssignedAgents=담당AI를 agentIds로 보정(또는 lead로 폴백). 주입형 어댑터. 테스트(mock): 깔끔 JSON/프로즈+펜스/1회실패후성공(호출2)/계속실패(정확히 max 호출 후 throw)/담당AI 밖 클램프.",
+      "targetFiles": ["packages/core/src/projects/planner.ts", "packages/core/src/index.ts", "packages/core/test/planner.test.ts"],
+      "dependencies": ["task-L01"],
+      "acceptanceCriteria": ["AC-04", "AC-05", "AC-06", "AC-07", "AC-14"],
+      "testCommands": ["corepack pnpm --filter @baton/core test"]
+    },
+    {
+      "id": "task-L03",
+      "title": "core: ProjectService.setTeamPlan + CLI plan generate/show/set",
+      "description": "ProjectService.setTeamPlan(id, plan)=TeamPlanSchema + assertPlanAgents(project.agentIds) 검증 후 레지스트리 갱신, getTeamPlan(id). overview 저장. CLI project.ts: 'project plan generate <id> --overview <t>' → 대표(leadAgentId provider) 어댑터로 generateTeamPlan → setTeamPlan(overview 포함) → 봉투 kind 'team-plan'. lead 미가용 preflight(어댑터 확인) → 안내+비정상 종료. 'project plan show <id> [--json]' → 저장 plan(봉투). 'project plan set <id>' (stdin 또는 --file) → JSON 파싱+검증+저장, 잘못된 입력 거부. 테스트(mock 어댑터 주입).",
+      "targetFiles": ["packages/core/src/projects/ProjectService.ts", "packages/cli/src/commands/project.ts", "packages/core/test/projectService.test.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-L02"],
+      "acceptanceCriteria": ["AC-08", "AC-09", "AC-10"],
+      "testCommands": ["corepack pnpm --filter @baton/core test", "corepack pnpm --filter @baton/cli test"]
+    },
+    {
+      "id": "task-L04",
+      "title": "GUI: TeamPlan Codable + EditModel + client",
+      "description": "apps/macos/Baton/Sources/BatonKit/Contract/TeamPlan.swift: TeamRole/TeamPlan Codable(core 일치). Forms/TeamPlanEditModel.swift: roles 편집(add/remove, name/description/instructions 수정, assignedAgentId 변경 — project.agentIds 내), isValid(역할 비빔/이름 비빔/담당AI 유효), toJSON()/직렬화. Client/BatonClient.swift: generateTeamPlan(projectId, overview)/showTeamPlan(id)/setTeamPlan(id, plan) — argv 배열 + plan은 stdin/임시파일, 봉투 디코드, 에러 표면화. Tests: EditModel 편집/검증/직렬화, client argv/mock.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonKit/Contract/TeamPlan.swift", "apps/macos/Baton/Sources/BatonKit/Forms/TeamPlanEditModel.swift", "apps/macos/Baton/Sources/BatonKit/Client/BatonClient.swift", "apps/macos/Baton/Tests/BatonKitTests/TeamPlanEditModelTests.swift", "apps/macos/Baton/Tests/BatonKitTests/BatonClientPlanTests.swift"],
+      "dependencies": ["task-L03"],
+      "acceptanceCriteria": ["AC-11", "AC-12"],
+      "testCommands": ["swift test"]
+    },
+    {
+      "id": "task-L05",
+      "title": "GUI: 개요/생성/편집 화면 + README/UX + 게이트",
+      "description": "Sources/BatonApp/ProjectPlanView.swift: 프로젝트 상세 → 개요 입력(TextEditor) → '대표에게 맡기기'(generateTeamPlan, 생성 중 표시, lead 미설정/미가용 안내) → TeamPlan 역할 카드 편집(이름/설명/담당AI 드롭다운/지침 + 추가·삭제) → 저장(setTeamPlan). 진입 연결. BatonTheme/한국어, View 얇게(BatonKit 의존). apps/macos/README.md/UX.md: 개요→생성→검토/수정→저장 흐름·수동 QA 체크리스트. 보안 회귀(credential/세션토큰/danger/HTTP/네트워크 0, argv 배열). 전체 게이트(루트 pnpm typecheck/test/build 회귀 0 + swift build/test). 자체 diff 리뷰, 최종 요약(UI 수동 QA·실제 AI 미호출 명시).",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonApp/ProjectPlanView.swift", "apps/macos/Baton/Sources/BatonApp/BatonApp.swift", "apps/macos/README.md", "apps/macos/UX.md", "packages/core/test/security.test.ts"],
+      "dependencies": ["task-L04"],
+      "acceptanceCriteria": ["AC-13", "AC-15", "AC-16"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build", "swift build", "swift test"]
+    }
+  ]
+}

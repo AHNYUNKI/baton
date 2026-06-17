@@ -96,4 +96,57 @@ describe("ProjectService", () => {
 
     await expect(service.add(path.join(tmpdir(), "does-not-exist"))).rejects.toThrow("Project path does not exist");
   });
+
+  it("stores and retrieves a validated TeamPlan", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "baton-home-"));
+    const service = new ProjectService({ homeDir, clock: fixedClock("2026-06-15T00:00:00.000Z") });
+    const project = await service.create({
+      name: "Baton",
+      source: { kind: "github", value: "https://github.com/example/baton" },
+      agentIds: ["codex", "claude"],
+      leadAgentId: "claude"
+    });
+    const plan = {
+      roles: [
+        {
+          id: "planner",
+          name: "Planner",
+          description: "Plans the work",
+          assignedAgentId: "claude",
+          instructions: "Draft a plan."
+        }
+      ]
+    };
+
+    const updated = await service.setTeamPlan(project.id, plan, { overview: "Build team planning." });
+
+    expect(updated.overview).toBe("Build team planning.");
+    expect(updated.teamPlan).toEqual(plan);
+    expect(await service.getTeamPlan(project.id)).toEqual(plan);
+    expect(JSON.parse(await readFile(path.join(homeDir, "projects.json"), "utf8"))[0].teamPlan).toEqual(plan);
+  });
+
+  it("rejects TeamPlans assigned to agents outside the project", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "baton-home-"));
+    const service = new ProjectService({ homeDir });
+    const project = await service.create({
+      name: "Baton",
+      source: { kind: "github", value: "https://github.com/example/baton" },
+      agentIds: ["codex"]
+    });
+
+    await expect(
+      service.setTeamPlan(project.id, {
+        roles: [
+          {
+            id: "planner",
+            name: "Planner",
+            description: "Plans the work",
+            assignedAgentId: "claude",
+            instructions: "Draft a plan."
+          }
+        ]
+      })
+    ).rejects.toThrow("project.agentIds");
+  });
 });

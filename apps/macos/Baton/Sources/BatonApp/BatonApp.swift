@@ -10,6 +10,7 @@ struct BatonApp: App {
     @State private var isShowingSettings = false
     @State private var sidebarSection: SidebarSection = .runs
     @State private var projectRefreshToken = UUID()
+    @State private var selectedProject: Project?
 
     var body: some Scene {
         WindowGroup {
@@ -33,8 +34,12 @@ struct BatonApp: App {
                         ProjectsListView(
                             client: appModel.makeClient(),
                             refreshKey: "\(appModel.storeGeneration.uuidString)-\(projectRefreshToken.uuidString)",
+                            selectedProjectId: selectedProject?.id,
                             onNewProject: {
                                 isShowingNewProject = true
+                            },
+                            onSelectProject: { project in
+                                selectedProject = project
                             }
                         )
                     }
@@ -44,9 +49,16 @@ struct BatonApp: App {
                 case .runs:
                     RunDetailView(store: appModel.store)
                 case .projects:
-                    ProjectDetailPlaceholder(onNewProject: {
-                        isShowingNewProject = true
-                    })
+                    if let selectedProject {
+                        ProjectPlanView(project: selectedProject, client: appModel.makeClient()) {
+                            projectRefreshToken = UUID()
+                        }
+                        .id(selectedProject.id)
+                    } else {
+                        ProjectDetailPlaceholder(onNewProject: {
+                            isShowingNewProject = true
+                        })
+                    }
                 }
             }
             .frame(minWidth: 900, minHeight: 560)

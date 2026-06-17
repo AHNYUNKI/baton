@@ -21,6 +21,8 @@ public struct Project: Codable, Equatable, Hashable, Identifiable, Sendable {
     public let source: ProjectSource
     public let agentIds: [String]
     public let leadAgentId: String?
+    public let overview: String?
+    public let teamPlan: TeamPlan?
     public let createdAt: String
 
     public init(
@@ -29,6 +31,8 @@ public struct Project: Codable, Equatable, Hashable, Identifiable, Sendable {
         source: ProjectSource,
         agentIds: [String],
         leadAgentId: String? = nil,
+        overview: String? = nil,
+        teamPlan: TeamPlan? = nil,
         createdAt: String
     ) {
         self.id = id
@@ -36,6 +40,8 @@ public struct Project: Codable, Equatable, Hashable, Identifiable, Sendable {
         self.source = source
         self.agentIds = agentIds
         self.leadAgentId = leadAgentId
+        self.overview = overview
+        self.teamPlan = teamPlan
         self.createdAt = createdAt
     }
 }

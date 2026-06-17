@@ -3,7 +3,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 
 import { z } from "zod";
-import { ProjectSchema, type AgentId, type Project, type ProjectSource } from "@baton/schemas";
+import { ProjectSchema, TeamPlanSchema, assertPlanAgents, type AgentId, type Project, type ProjectSource, type TeamPlan } from "@baton/schemas";
 import type { ZodError } from "zod";
 
 import { batonHome } from "../config/paths.js";
@@ -17,6 +17,10 @@ export type ProjectCreateInput = {
   source: ProjectSource;
   agentIds: string[];
   leadAgentId?: string;
+};
+
+export type ProjectSetTeamPlanOptions = {
+  overview?: string;
 };
 
 export type ProjectServiceOptions = {
@@ -78,6 +82,40 @@ export class ProjectService {
     return this.readRegistry();
   }
 
+  public async get(projectId: string): Promise<Project | undefined> {
+    const registry = await this.readRegistry();
+    return registry.find((project) => project.id === projectId);
+  }
+
+  public async getTeamPlan(projectId: string): Promise<TeamPlan | undefined> {
+    const project = await this.getProjectOrThrow(projectId);
+    return project.teamPlan;
+  }
+
+  public async setTeamPlan(projectId: string, plan: unknown, options: ProjectSetTeamPlanOptions = {}): Promise<Project> {
+    const parsedPlan = this.parseTeamPlan(plan);
+    const registry = await this.readRegistry();
+    const projectIndex = registry.findIndex((project) => project.id === projectId);
+    if (projectIndex === -1) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+
+    const project = registry[projectIndex];
+    if (project === undefined) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+    assertPlanAgents(parsedPlan, project.agentIds);
+    const nextProject = this.parseProject({
+      ...project,
+      ...(options.overview === undefined ? {} : { overview: options.overview }),
+      teamPlan: parsedPlan
+    });
+    const nextRegistry = [...registry];
+    nextRegistry[projectIndex] = nextProject;
+    await this.writeRegistry(nextRegistry);
+    return nextProject;
+  }
+
   private registryPath(): string {
     return path.join(this.homeDir, "projects.json");
   }
@@ -110,6 +148,22 @@ export class ProjectService {
     } catch (error) {
       throw new Error(`Invalid project: ${formatError(error)}`);
     }
+  }
+
+  private parseTeamPlan(value: unknown): TeamPlan {
+    try {
+      return TeamPlanSchema.parse(value);
+    } catch (error) {
+      throw new Error(`Invalid TeamPlan: ${formatError(error)}`);
+    }
+  }
+
+  private async getProjectOrThrow(projectId: string): Promise<Project> {
+    const project = await this.get(projectId);
+    if (project === undefined) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+    return project;
   }
 
   private normalizeSourceValue(source: ProjectSource): string {

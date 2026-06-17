@@ -6,6 +6,7 @@ public enum BatonClientError: Error, Equatable, LocalizedError, Sendable {
     case emptyOutput(arguments: [String])
     case unexpectedEnvelopeKind(expected: String, actual: String)
     case invalidProjectForm
+    case invalidTeamPlan
 
     public var errorDescription: String? {
         switch self {
@@ -19,6 +20,8 @@ public enum BatonClientError: Error, Equatable, LocalizedError, Sendable {
             "Unexpected Baton envelope kind \(actual); expected \(expected)."
         case .invalidProjectForm:
             "Project form is incomplete or invalid."
+        case .invalidTeamPlan:
+            "TeamPlan is incomplete or invalid."
         }
     }
 }
@@ -130,6 +133,37 @@ public struct BatonClient: Sendable {
 
     public func listProjects() async throws -> [Project] {
         try await decodeJSON(arguments: ["project", "list", "--json"], expectedKind: "project-list")
+    }
+
+    public func generateTeamPlan(projectId: String, overview: String) async throws -> TeamPlan {
+        let trimmed = overview.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !projectId.isEmpty, !trimmed.isEmpty else {
+            throw BatonClientError.invalidTeamPlan
+        }
+        return try await decodeJSON(arguments: ["project", "plan", "generate", projectId, "--overview", trimmed], expectedKind: "team-plan")
+    }
+
+    public func showTeamPlan(projectId: String) async throws -> TeamPlan {
+        try await decodeJSON(arguments: ["project", "plan", "show", projectId, "--json"], expectedKind: "team-plan")
+    }
+
+    @discardableResult
+    public func setTeamPlan(projectId: String, plan: TeamPlan) async throws -> TeamPlan {
+        guard !projectId.isEmpty, !plan.roles.isEmpty else {
+            throw BatonClientError.invalidTeamPlan
+        }
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("baton-team-plan-\(UUID().uuidString)")
+            .appendingPathExtension("json")
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        try encoder.encode(plan).write(to: url, options: .atomic)
+        defer {
+            try? FileManager.default.removeItem(at: url)
+        }
+
+        return try await decodeJSON(arguments: ["project", "plan", "set", projectId, "--file", url.path], expectedKind: "team-plan")
     }
 
     @discardableResult

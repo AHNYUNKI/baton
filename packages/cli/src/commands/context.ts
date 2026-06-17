@@ -9,6 +9,7 @@ export type CommandContext = {
   stderr: WriteLine;
   runner: ProcessRunner;
   clock: Clock;
+  readStdin?: () => Promise<string>;
 };
 
 export type CommandResult = number;
