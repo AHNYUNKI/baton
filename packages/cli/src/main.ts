@@ -95,7 +95,7 @@ export function usage(): string {
     "  baton project plan generate <projectId> --overview <text>",
     "  baton project plan show <projectId> [--json]",
     "  baton project plan set <projectId> [--file <path>]",
-    "  baton project plan run start <projectId> [--base <branch>] [--json]",
+    "  baton project plan run start <projectId> [--base <branch>] [--codex] [--claude] [--timeout-ms <ms>] [--json]",
     "  baton project plan run approve <teamRunId> [--note <text>] [--json]",
     "  baton project plan run reject <teamRunId> [--note <text>] [--json]",
     "  baton project plan run show <teamRunId> [--json]",

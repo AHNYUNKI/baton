@@ -1,0 +1,47 @@
+{
+  "version": "1",
+  "runId": "real-dispatch-v0.19.3",
+  "buildsOn": "token-usage-v0.19.2",
+  "baseBranch": "origin/main",
+  "language": "typescript",
+  "gates": ["pnpm typecheck", "pnpm test", "pnpm build"],
+  "notes": "StubWorker→실제 codex/claude(opt-in), 읽기 전용 강제(codex read-only sandbox, claude 비편집). 기본 stub 유지(회귀 0). 기존 Run 경로/claude 기본 동작 불변. 쓰기 모드/Swift/병렬 후속. 종단 실행은 수동 QA, 단위는 mock runner.",
+  "tasks": [
+    {
+      "id": "task-D01",
+      "title": "ClaudeCodeAdapter: opt-in 읽기전용 + JSON usage (기본 보존)",
+      "description": "packages/core/src/workers/claude/ClaudeCodeAdapter.ts: 옵션 추가 readOnly?: boolean, outputFormat?: 'text'|'json'. readOnly면 비편집 권한 플래그 부착(정확 플래그는 claude --help로 확인 — 후보 --permission-mode plan 또는 읽기전용 tool allowlist; 불확실 시 가장 제한적). outputFormat='json'이면 --output-format json으로 실행 후 stdout JSON 파싱: result(텍스트)→WorkerRunResult.stdout, usage(input/output tokens)→metadata.usage{inputTokens,outputTokens}. 파싱 실패 시 원문 stdout 유지 + usage 생략. 옵션 미지정 시 현행 ['--print'] 평문 동작 그대로(기존 Run 회귀 0). 테스트(mock runner): readOnly 인자 부착, json 파싱 usage/텍스트, 파싱 실패 폴백, 기본 동작 보존.",
+      "targetFiles": ["packages/core/src/workers/claude/ClaudeCodeAdapter.ts", "packages/core/test/workers/claudeCodeAdapter.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-02", "AC-04", "AC-05", "AC-12"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-D02",
+      "title": "AgentWorkerRegistry: 읽기 전용 실제 어댑터 프로파일",
+      "description": "packages/core/src/teamRuns/AgentWorkerRegistry.ts: createAgentWorkerRegistry({codex,claude,runner,readOnly=true}) — codex:true→new CodexExecAdapter({runner, sandbox:'read-only'}), claude:true→new ClaudeCodeAdapter({runner, readOnly:true, outputFormat:'json'}), 아니면 StubWorker. 쓰기 분기 미구현(read-only 고정). 결과에 codexWorker/claudeWorker 표기 유지. 테스트: codex가 read-only sandbox로 생성, claude가 readOnly+json으로 생성, 미지정 시 stub.",
+      "targetFiles": ["packages/core/src/teamRuns/AgentWorkerRegistry.ts", "packages/core/test/teamRuns/agentWorkerRegistry.test.ts"],
+      "dependencies": ["task-D01"],
+      "acceptanceCriteria": ["AC-03", "AC-08"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-D03",
+      "title": "(선택) CodexExecAdapter usage best-effort",
+      "description": "packages/core/src/workers/codex/CodexExecAdapter.ts: codex exec 출력에 usage가 있으면 파싱해 metadata.usage 설정(best-effort). 포맷 불확실하면 미설정(executor가 추정 폴백). sandbox read-only 경로는 기존 옵션 사용. 변경 최소. 테스트(있으면): usage 있는 mock 출력 파싱 / 없으면 미설정.",
+      "targetFiles": ["packages/core/src/workers/codex/CodexExecAdapter.ts", "packages/core/test/workers/codexExecAdapter.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-04"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-D04",
+      "title": "CLI: plan run start --codex/--claude + preflight + timeout",
+      "description": "packages/cli/src/commands/project.ts: plan run start <projectId>에 --codex, --claude, --timeout-ms 플래그 추가. 플래그 없으면 기존대로 createAgentWorkerRegistry()(stub). 켜면 createAgentWorkerRegistry({codex,claude,runner})로 실제(읽기전용) 어댑터. 각 켠 플랫폼에 preflight: checkCodex/checkClaude(기존 함수 재사용)로 CLI 존재/실행 확인 → 실패 시 친절한 비영 오류로 디스패치 전 중단. timeout은 --timeout-ms 또는 합리적 기본 → executor.timeoutMs. 승인 흐름(start→awaiting→approve) 불변. 도움말 갱신. 테스트(mock runner): 플래그 없음→stub, --codex/--claude→실제 어댑터 선택, preflight 실패→오류 중단.",
+      "targetFiles": ["packages/cli/src/commands/project.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-D02"],
+      "acceptanceCriteria": ["AC-01", "AC-06", "AC-07", "AC-09", "AC-10", "AC-11"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build"]
+    }
+  ]
+}

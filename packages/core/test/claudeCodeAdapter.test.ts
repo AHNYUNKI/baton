@@ -65,6 +65,72 @@ describe("ClaudeCodeAdapter", () => {
     });
   });
 
+  it("adds read-only plan mode only when opted in", async () => {
+    const mock = createMockProcessRunner();
+    const adapter = new ClaudeCodeAdapter({ runner: mock.runner, readOnly: true });
+
+    await adapter.run({ cwd: "/repo/worktree", prompt: "prompt" });
+
+    expect(mock.calls[0]).toEqual({
+      command: "claude",
+      args: ["--print", "--permission-mode", "plan"],
+      options: { cwd: "/repo/worktree", input: "prompt" }
+    });
+  });
+
+  it("parses json output into result text and measured usage", async () => {
+    const mock = createMockProcessRunner([
+      {
+        stdout: JSON.stringify({
+          result: "# Analysis\n\nMeasured",
+          usage: {
+            input_tokens: 10,
+            cache_creation_input_tokens: 2,
+            cache_read_input_tokens: 3,
+            output_tokens: 4
+          }
+        }),
+        stderr: "",
+        exitCode: 0,
+        durationMs: 12
+      }
+    ]);
+    const runDirectory = await mkdtemp(path.join(tmpdir(), "baton-claude-json-"));
+    const adapter = new ClaudeCodeAdapter({ runner: mock.runner, readOnly: true, outputFormat: "json" });
+
+    const result = await adapter.run({
+      cwd: "/repo/worktree",
+      prompt: "prompt",
+      metadata: { runDirectory, stepId: "analyze", stepType: "analyze" }
+    });
+
+    expect(result.stdout).toBe("# Analysis\n\nMeasured");
+    expect(result.metadata).toEqual({
+      provider: "claude",
+      usage: {
+        inputTokens: 15,
+        outputTokens: 4
+      }
+    });
+    expect(await readFile(path.join(runDirectory, "analysis.md"), "utf8")).toBe("# Analysis\n\nMeasured");
+    expect(mock.calls[0]).toEqual({
+      command: "claude",
+      args: ["--print", "--permission-mode", "plan", "--output-format", "json"],
+      options: { cwd: "/repo/worktree", input: "prompt" }
+    });
+  });
+
+  it("keeps raw stdout when json parsing fails", async () => {
+    const mock = createMockProcessRunner([{ stdout: "{not-json", stderr: "", exitCode: 0, durationMs: 1 }]);
+    const adapter = new ClaudeCodeAdapter({ runner: mock.runner, outputFormat: "json" });
+
+    const result = await adapter.run({ cwd: "/repo/worktree", prompt: "prompt" });
+
+    expect(result.stdout).toBe("{not-json");
+    expect(result.metadata).toEqual({ provider: "claude" });
+    expect(mock.calls[0]?.args).toEqual(["--print", "--output-format", "json"]);
+  });
+
   it.each([
     ["analyze", "analysis.md"],
     ["design", "design.md"],
