@@ -5,7 +5,8 @@ export const TeamRoleSchema = z.object({
   name: z.string().trim().min(1),
   description: z.string(),
   assignedAgentId: z.string().trim().min(1),
-  instructions: z.string()
+  instructions: z.string(),
+  reportsTo: z.string().trim().min(1).nullish()
 });
 
 export const TeamPlanSchema = z

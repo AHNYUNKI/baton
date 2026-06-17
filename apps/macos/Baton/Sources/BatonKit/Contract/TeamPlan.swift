@@ -6,19 +6,22 @@ public struct TeamRole: Codable, Equatable, Hashable, Identifiable, Sendable {
     public let description: String
     public let assignedAgentId: String
     public let instructions: String
+    public let reportsTo: String?
 
     public init(
         id: String,
         name: String,
         description: String,
         assignedAgentId: String,
-        instructions: String
+        instructions: String,
+        reportsTo: String? = nil
     ) {
         self.id = id
         self.name = name
         self.description = description
         self.assignedAgentId = assignedAgentId
         self.instructions = instructions
+        self.reportsTo = reportsTo
     }
 }
 

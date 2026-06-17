@@ -41,6 +41,14 @@ v0.18 adds the Paperclip-style app shell:
 - `조직도` renders the existing TeamPlan as lead AI + role nodes
 - `실행` is intentionally a placeholder until the v0.19 execution engine work
 
+v0.18.3 extends TeamPlan with optional `reportsTo` hierarchy:
+
+- missing `reportsTo` stays backward-compatible and renders as representative-direct
+- `reportsTo: null` also means representative-direct
+- valid `reportsTo` role ids render as nested manager/report branches
+- missing, self-referential, or cyclic parent references are displayed as
+  representative-direct instead of failing the app
+
 See `UX.md` for the shared macOS design language and manual QA checklist.
 
 ## Build
@@ -112,6 +120,7 @@ Select a project to draft and edit its TeamPlan:
 - `개요` maps to `baton project plan generate <projectId> --overview <text>`.
 - `대표에게 맡기기` is the only action that invokes the configured lead AI.
 - generated roles are decoded from the `team-plan` envelope and shown for review.
+- each role may keep an optional `reportsTo` role id; `대표` maps to no parent.
 - role edits stay local until `저장`.
 - `저장` writes a temporary JSON file and calls `baton project plan set <projectId> --file <path>`.
 
@@ -127,8 +136,10 @@ with `baton project list --json` through `BatonClient`, shares the existing
 The org chart is a read-only visualization of already persisted project data:
 
 - lead: `Project.leadAgentId`, or the single project agent when no lead is set
-- roles: `Project.teamPlan.roles`
+- roles: `Project.teamPlan.roles`, nested by optional `TeamRole.reportsTo`
 - node state: static `planned` unless a caller supplies a role status map
+- hierarchy defense: missing parents, self references, and cycle participants are
+  treated as representative-direct roots
 
 No execution dispatch, live role lighting, HTTP call, or direct `.baton` write is
 introduced in v0.18.
@@ -170,6 +181,11 @@ support is not part of the gate. Verify these manually:
 - Confirm project tabs switch between `개요`, `계획`, `조직도`, and `실행`.
 - Confirm `조직도` shows the representative AI with `👑`, role nodes, assigned AI
   labels, and text status labels.
+- Confirm a TeamPlan with `reportsTo` renders 2~3 levels with horizontal cards,
+  elbow connectors, and horizontal/vertical canvas scrolling.
+- Confirm missing `reportsTo` and invalid parent references still render as
+  representative-direct roles.
+- Edit a role's `보고 대상`, save, refresh, and confirm the hierarchy is preserved.
 - Confirm the `실행` tab says the TeamPlan execution engine is v0.19 and does
   not start dispatching work.
 - Edit a role name, description, 담당 AI, and 지침; add and delete a role; confirm
