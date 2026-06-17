@@ -4,7 +4,9 @@ import SwiftUI
 struct ProjectsListView: View {
     let client: BatonClient
     let refreshKey: String
+    let selectedProjectId: String?
     let onNewProject: () -> Void
+    let onSelectProject: (Project) -> Void
 
     @State private var projects: [Project] = []
     @State private var isLoading = false
@@ -20,7 +22,12 @@ struct ProjectsListView: View {
                         emptyState
                     } else {
                         ForEach(projects) { project in
-                            ProjectCard(project: project)
+                            Button {
+                                onSelectProject(project)
+                            } label: {
+                                ProjectCard(project: project, isSelected: selectedProjectId == project.id)
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -100,6 +107,9 @@ struct ProjectsListView: View {
                 }
                 return left.name < right.name
             }
+            if let firstProject = projects.first, !projects.contains(where: { $0.id == selectedProjectId }) {
+                onSelectProject(firstProject)
+            }
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -109,6 +119,7 @@ struct ProjectsListView: View {
 
 private struct ProjectCard: View {
     let project: Project
+    let isSelected: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -138,15 +149,18 @@ private struct ProjectCard: View {
                 ForEach(project.agentIds, id: \.self) { agentId in
                     agentPill(AgentCatalog.displayName(for: agentId), systemImage: "person.crop.circle")
                 }
+                if let teamPlan = project.teamPlan {
+                    agentPill("역할 \(teamPlan.roles.count)", systemImage: "checkmark.seal")
+                }
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(BatonTheme.surface)
+        .background(isSelected ? BatonTheme.surfaceElevated : BatonTheme.surface)
         .clipShape(RoundedRectangle(cornerRadius: BatonTheme.cardRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: BatonTheme.cardRadius, style: .continuous)
-                .stroke(BatonTheme.separator, lineWidth: 1)
+                .stroke(isSelected ? BatonTheme.amber.opacity(0.7) : BatonTheme.separator, lineWidth: 1)
         }
     }
 

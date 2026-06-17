@@ -15,6 +15,9 @@ read/write CLI contract through subprocess calls:
 - `baton run clean <runId>`
 - `baton project create --name <name> --source-kind <local|github> --source <value> --agent <id> [--agent <id> ...] [--lead <id>]`
 - `baton project list --json`
+- `baton project plan generate <projectId> --overview <text>`
+- `baton project plan show <projectId> --json`
+- `baton project plan set <projectId> --file <path>`
 
 No HTTP server, socket server, direct `.baton` mutation, credential handling, or
 safety bypass is introduced here. Approval gates and worktree isolation remain
@@ -94,6 +97,19 @@ Use `새 프로젝트` to register a project from the GUI:
 Project creation and listing use argv arrays through `BatonClient`; the app does
 not mutate `.baton` directly.
 
+## TeamPlan
+
+Select a project to draft and edit its TeamPlan:
+
+- `개요` maps to `baton project plan generate <projectId> --overview <text>`.
+- `대표에게 맡기기` is the only action that invokes the configured lead AI.
+- generated roles are decoded from the `team-plan` envelope and shown for review.
+- role edits stay local until `저장`.
+- `저장` writes a temporary JSON file and calls `baton project plan set <projectId> --file <path>`.
+
+The app does not execute the plan. v0.17 only supports draft generation, human
+review/editing, and persistence.
+
 ## Manual QA Checklist
 
 SwiftUI UI automation is out of scope for this slice because Xcode UI test
@@ -120,6 +136,12 @@ support is not part of the gate. Verify these manually:
 - Create a GitHub project using a `https://github.com/owner/repo` URL and confirm
   it is shown as a reference only.
 - Select both Codex and Claude and confirm `대표` is required before `생성`.
+- Select a project, enter `개요`, and confirm `대표에게 맡기기` shows generated roles
+  when the lead CLI is available.
+- Edit a role name, description, 담당 AI, and 지침; add and delete a role; confirm
+  invalid plans keep `저장` disabled.
+- Save the TeamPlan and confirm the project card shows the role count after refresh.
+- Confirm lead CLI failures are surfaced as an error and the app does not crash.
 
 ## Test Coverage
 
@@ -131,6 +153,8 @@ support is not part of the gate. Verify these manually:
 - form-to-`StartRunOptions` mapping for new run creation
 - `ProjectFormModel` validation and argv-array construction
 - `BatonClient.createProject` and `BatonClient.listProjects` argv/envelope logic
+- `TeamPlanEditModel` validation, editing, and JSON serialization
+- `BatonClient.generateTeamPlan`, `showTeamPlan`, and `setTeamPlan` argv/envelope logic
 - `RunsStore.startRun` orchestration and refresh behavior
 - baton executable path resolution
 - Korean status/role display mappings and color tokens

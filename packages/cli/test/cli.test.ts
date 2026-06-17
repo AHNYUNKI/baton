@@ -17,7 +17,16 @@ import {
   fixedClock
 } from "@baton/core";
 import type { DbClient, DbQueryParams, ProcessRunner } from "@baton/core";
-import { ProjectListEnvelopeSchema, RunDetailEnvelopeSchema, RunListEnvelopeSchema, StateEnvelopeSchema, WatchEventEnvelopeSchema, type AgentRole, type Run } from "@baton/schemas";
+import {
+  ProjectListEnvelopeSchema,
+  RunDetailEnvelopeSchema,
+  RunListEnvelopeSchema,
+  StateEnvelopeSchema,
+  TeamPlanEnvelopeSchema,
+  WatchEventEnvelopeSchema,
+  type AgentRole,
+  type Run
+} from "@baton/schemas";
 
 import { runCli } from "../src/main.js";
 import { dbCommand } from "../src/commands/db.js";
@@ -302,6 +311,150 @@ describe("@baton/cli", () => {
     errors.length = 0;
     expect(await runCli(["project", "create", "--name", "Bad", "--source-kind", "git", "--source", "x", "--agent", "codex"], { env, stderr: (line) => errors.push(line) })).toBe(1);
     expect(errors.join("\n")).toContain("baton project create");
+  });
+
+  it("generates and stores a project TeamPlan as a JSON envelope", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "baton-cli-home-"));
+    const localDir = await mkdtemp(path.join(tmpdir(), "baton-cli-local-"));
+    const output: string[] = [];
+    const env = { ...process.env, BATON_HOME: homeDir };
+    const mock = createMockProcessRunner([
+      { stdout: "claude 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      {
+        stdout: JSON.stringify({
+          roles: [
+            {
+              id: "planner",
+              name: "Planner",
+              description: "Plans work",
+              assignedAgentId: "claude",
+              instructions: "Create the plan."
+            }
+          ]
+        }),
+        stderr: "",
+        exitCode: 0,
+        durationMs: 1
+      }
+    ]);
+
+    expect(
+      await runCli(
+        [
+          "project",
+          "create",
+          "--name",
+          "Team Project",
+          "--source-kind",
+          "local",
+          "--source",
+          localDir,
+          "--agent",
+          "codex",
+          "--agent",
+          "claude",
+          "--lead",
+          "claude"
+        ],
+        { env }
+      )
+    ).toBe(0);
+
+    const projectId = (JSON.parse(await readFile(path.join(homeDir, "projects.json"), "utf8")) as Array<{ id: string }>)[0]?.id ?? "";
+    expect(
+      await runCli(["project", "plan", "generate", projectId, "--overview", "Build a team plan."], {
+        env,
+        runner: mock.runner,
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+
+    const envelope = TeamPlanEnvelopeSchema.parse(JSON.parse(output.join("\n")));
+    expect(envelope.kind).toBe("team-plan");
+    expect(envelope.data.roles[0]?.assignedAgentId).toBe("claude");
+    expect(mock.calls.map((call) => [call.command, call.args])).toEqual([
+      ["claude", ["--version"]],
+      ["claude", ["--print"]]
+    ]);
+    expect(mock.calls[1]?.options?.cwd).toBe(localDir);
+    expect(JSON.parse(await readFile(path.join(homeDir, "projects.json"), "utf8"))[0].overview).toBe("Build a team plan.");
+  });
+
+  it("shows and sets a project TeamPlan through stdin", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "baton-cli-home-"));
+    const output: string[] = [];
+    const env = { ...process.env, BATON_HOME: homeDir };
+
+    expect(
+      await runCli(["project", "create", "--name", "Team Project", "--source-kind", "github", "--source", "https://github.com/example/baton", "--agent", "codex"], { env })
+    ).toBe(0);
+
+    const projectId = (JSON.parse(await readFile(path.join(homeDir, "projects.json"), "utf8")) as Array<{ id: string }>)[0]?.id ?? "";
+    const plan = {
+      roles: [
+        {
+          id: "implementer",
+          name: "Implementer",
+          description: "Implements changes",
+          assignedAgentId: "codex",
+          instructions: "Keep changes small."
+        }
+      ]
+    };
+
+    expect(
+      await runCli(["project", "plan", "set", projectId], {
+        env,
+        stdin: JSON.stringify(plan),
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+
+    output.length = 0;
+    expect(await runCli(["project", "plan", "show", projectId, "--json"], { env, stdout: (line) => output.push(line) })).toBe(0);
+    expect(TeamPlanEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data).toEqual(plan);
+  });
+
+  it("fails plan generation before invoking the lead when preflight fails", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "baton-cli-home-"));
+    const errors: string[] = [];
+    const env = { ...process.env, BATON_HOME: homeDir };
+    const mock = createMockProcessRunner([{ stdout: "", stderr: "missing", exitCode: 1, durationMs: 1 }]);
+
+    expect(
+      await runCli(
+        [
+          "project",
+          "create",
+          "--name",
+          "Team Project",
+          "--source-kind",
+          "github",
+          "--source",
+          "https://github.com/example/baton",
+          "--agent",
+          "codex",
+          "--agent",
+          "claude",
+          "--lead",
+          "claude"
+        ],
+        { env }
+      )
+    ).toBe(0);
+
+    const projectId = (JSON.parse(await readFile(path.join(homeDir, "projects.json"), "utf8")) as Array<{ id: string }>)[0]?.id ?? "";
+    expect(
+      await runCli(["project", "plan", "generate", projectId, "--overview", "Build a team plan."], {
+        env,
+        runner: mock.runner,
+        stderr: (line) => errors.push(line)
+      })
+    ).toBe(1);
+
+    expect(errors.join("\n")).toContain("Lead AI claude is not available");
+    expect(mock.calls).toHaveLength(1);
+    expect(mock.calls[0]?.args).toEqual(["--version"]);
   });
 
   it("lists bundled agents and workflows", async () => {
