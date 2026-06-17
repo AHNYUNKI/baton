@@ -33,6 +33,14 @@ v0.15 establishes a paperclip-inspired Korean UI:
 - technical identifiers such as `runId`, workflow ids, artifact filenames, and
   CLI flags remain in English
 
+v0.18 adds the Paperclip-style app shell:
+
+- grouped sidebar IA: `액션`, `작업`, `프로젝트`, `에이전트`, `계정`
+- `받은 함` collects only `awaiting-approval` runs from the existing run list
+- project detail tabs: `개요`, `계획`, `조직도`, `실행`
+- `조직도` renders the existing TeamPlan as lead AI + role nodes
+- `실행` is intentionally a placeholder until the v0.19 execution engine work
+
 See `UX.md` for the shared macOS design language and manual QA checklist.
 
 ## Build
@@ -110,6 +118,21 @@ Select a project to draft and edit its TeamPlan:
 The app does not execute the plan. v0.17 only supports draft generation, human
 review/editing, and persistence.
 
+## App Shell and Org Chart
+
+The app shell keeps Baton local-first and CLI-bound. `RootView` loads projects
+with `baton project list --json` through `BatonClient`, shares the existing
+`RunsStore`, and routes sections with the pure `AppNavigationModel`.
+
+The org chart is a read-only visualization of already persisted project data:
+
+- lead: `Project.leadAgentId`, or the single project agent when no lead is set
+- roles: `Project.teamPlan.roles`
+- node state: static `planned` unless a caller supplies a role status map
+
+No execution dispatch, live role lighting, HTTP call, or direct `.baton` write is
+introduced in v0.18.
+
 ## Manual QA Checklist
 
 SwiftUI UI automation is out of scope for this slice because Xcode UI test
@@ -130,6 +153,12 @@ support is not part of the gate. Verify these manually:
   calls use that path.
 - Confirm a missing `baton` executable shows an error and the app does not crash.
 - Confirm live changes from `baton watch` update the sidebar.
+- Confirm the grouped sidebar shows `액션`, `작업`, `프로젝트`, `에이전트`, and
+  `계정`.
+- Confirm `대시보드`, `받은 함`, `실행`, project rows, `AI 조직`, and `계정`
+  route the main content correctly.
+- Confirm `받은 함` shows only `승인 대기` runs and its count matches the
+  sidebar badge.
 - Open `새 프로젝트`; confirm empty `이름` or `소스` keeps `다음`/`생성` disabled.
 - Create a local project with the folder picker and confirm it appears in the
   `프로젝트` list with source, AI badges, and lead.
@@ -138,6 +167,11 @@ support is not part of the gate. Verify these manually:
 - Select both Codex and Claude and confirm `대표` is required before `생성`.
 - Select a project, enter `개요`, and confirm `대표에게 맡기기` shows generated roles
   when the lead CLI is available.
+- Confirm project tabs switch between `개요`, `계획`, `조직도`, and `실행`.
+- Confirm `조직도` shows the representative AI with `👑`, role nodes, assigned AI
+  labels, and text status labels.
+- Confirm the `실행` tab says the TeamPlan execution engine is v0.19 and does
+  not start dispatching work.
 - Edit a role name, description, 담당 AI, and 지침; add and delete a role; confirm
   invalid plans keep `저장` disabled.
 - Save the TeamPlan and confirm the project card shows the role count after refresh.
@@ -161,6 +195,9 @@ support is not part of the gate. Verify these manually:
 - non-zero exit, empty output, and missing executable errors
 - NDJSON partial-line buffering
 - deterministic `RunsStore` reduction and sorting
+- pure app navigation transitions for sidebar sections and project tabs
+- pure TeamPlan-to-org-chart mapping, including no-plan and single-agent lead cases
+- pure inbox filtering for `awaiting-approval` runs
 
 The SwiftUI views are kept thin and compile through `swift build`; detailed UI
 behavior remains manual QA for this milestone.
