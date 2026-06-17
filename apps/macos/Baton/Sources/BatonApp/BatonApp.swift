@@ -1,9 +1,11 @@
+import AppKit
 import BatonKit
 import Foundation
 import SwiftUI
 
 @main
 struct BatonApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appModel = BatonAppModel()
     @State private var isShowingNewRun = false
     @State private var isShowingNewProject = false
@@ -107,6 +109,13 @@ struct BatonApp: App {
                 }
             }
         }
+    }
+}
+
+private final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
