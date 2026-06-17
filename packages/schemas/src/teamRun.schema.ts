@@ -14,6 +14,7 @@ export const TeamRunRoleSchema = z.object({
   startedAt: z.string().datetime().optional(),
   completedAt: z.string().datetime().optional(),
   reason: z.string().min(1).optional(),
+  summary: z.string().optional(),
   artifacts: z.array(z.string().min(1)).optional()
 });
 

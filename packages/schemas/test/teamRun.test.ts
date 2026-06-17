@@ -51,6 +51,7 @@ describe("TeamRun schema", () => {
           startedAt: "2026-06-17T00:00:10.000Z",
           completedAt: "2026-06-17T00:00:20.000Z",
           reason: "Completed by stub worker.",
+          summary: "Design summary.",
           artifacts: ["/tmp/baton-worktree/logs/architect.stdout.log"]
         }
       ]
