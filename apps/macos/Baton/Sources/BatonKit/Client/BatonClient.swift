@@ -5,6 +5,7 @@ public enum BatonClientError: Error, Equatable, LocalizedError, Sendable {
     case commandFailed(arguments: [String], exitCode: Int32, stderr: String)
     case emptyOutput(arguments: [String])
     case unexpectedEnvelopeKind(expected: String, actual: String)
+    case invalidProjectForm
 
     public var errorDescription: String? {
         switch self {
@@ -16,6 +17,8 @@ public enum BatonClientError: Error, Equatable, LocalizedError, Sendable {
             "Baton command produced no JSON output: \(arguments.joined(separator: " "))"
         case let .unexpectedEnvelopeKind(expected, actual):
             "Unexpected Baton envelope kind \(actual); expected \(expected)."
+        case .invalidProjectForm:
+            "Project form is incomplete or invalid."
         }
     }
 }
@@ -123,6 +126,18 @@ public struct BatonClient: Sendable {
 
     public func state() async throws -> StateSnapshot {
         try await decodeJSON(arguments: ["state", "--json"], expectedKind: "state")
+    }
+
+    public func listProjects() async throws -> [Project] {
+        try await decodeJSON(arguments: ["project", "list", "--json"], expectedKind: "project-list")
+    }
+
+    @discardableResult
+    public func createProject(_ form: ProjectFormModel) async throws -> CommandResult {
+        guard form.canSubmit else {
+            throw BatonClientError.invalidProjectForm
+        }
+        return try await runMutation(arguments: form.buildCreateArguments())
     }
 
     @discardableResult

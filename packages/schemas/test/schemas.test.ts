@@ -15,7 +15,9 @@ describe("@baton/schemas", () => {
     const parsed = ProjectSchema.parse({
       id: "project-1",
       name: "Baton",
-      path: "/tmp/baton",
+      source: { kind: "local", value: "/tmp/baton" },
+      agentIds: ["codex"],
+      leadAgentId: "codex",
       createdAt: "2026-06-15T00:00:00.000Z"
     });
 

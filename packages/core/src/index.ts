@@ -9,6 +9,7 @@ export * from "./ports/Clock.js";
 export * from "./ports/ProcessRunner.js";
 export * from "./events/EventLogger.js";
 export * from "./projects/ProjectService.js";
+export * from "./projects/agentCatalog.js";
 export * from "./agents/loadAgentProfiles.js";
 export * from "./workflows/loadWorkflows.js";
 export * from "./git/GitWorktreeManager.js";

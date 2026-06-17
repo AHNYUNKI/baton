@@ -17,7 +17,7 @@ import {
   fixedClock
 } from "@baton/core";
 import type { DbClient, DbQueryParams, ProcessRunner } from "@baton/core";
-import { RunDetailEnvelopeSchema, RunListEnvelopeSchema, StateEnvelopeSchema, WatchEventEnvelopeSchema, type AgentRole, type Run } from "@baton/schemas";
+import { ProjectListEnvelopeSchema, RunDetailEnvelopeSchema, RunListEnvelopeSchema, StateEnvelopeSchema, WatchEventEnvelopeSchema, type AgentRole, type Run } from "@baton/schemas";
 
 import { runCli } from "../src/main.js";
 import { dbCommand } from "../src/commands/db.js";
@@ -232,6 +232,76 @@ describe("@baton/cli", () => {
     expect(await runCli(["project", "add", projectDir], { env, stdout: (line) => output.push(line) })).toBe(0);
     expect(await runCli(["project", "list"], { env, stdout: (line) => output.push(line) })).toBe(0);
     expect(output.join("\n")).toContain(projectDir);
+  });
+
+  it("creates projects and lists them as a JSON envelope", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "baton-cli-home-"));
+    const localDir = await mkdtemp(path.join(tmpdir(), "baton-cli-local-"));
+    const output: string[] = [];
+    const env = { ...process.env, BATON_HOME: homeDir };
+
+    expect(
+      await runCli(
+        [
+          "project",
+          "create",
+          "--name",
+          "Local Project",
+          "--source-kind",
+          "local",
+          "--source",
+          localDir,
+          "--agent",
+          "codex"
+        ],
+        { env, stdout: (line) => output.push(line) }
+      )
+    ).toBe(0);
+    expect(
+      await runCli(
+        [
+          "project",
+          "create",
+          "--name",
+          "GitHub Project",
+          "--source-kind",
+          "github",
+          "--source",
+          "https://github.com/example/baton",
+          "--agent",
+          "codex",
+          "--agent",
+          "claude",
+          "--lead",
+          "claude"
+        ],
+        { env, stdout: (line) => output.push(line) }
+      )
+    ).toBe(0);
+
+    output.length = 0;
+    expect(await runCli(["project", "list", "--json"], { env, stdout: (line) => output.push(line) })).toBe(0);
+
+    const envelope = ProjectListEnvelopeSchema.parse(JSON.parse(output.join("\n")));
+    expect(envelope.kind).toBe("project-list");
+    expect(envelope.data.map((project) => project.name)).toEqual(["Local Project", "GitHub Project"]);
+    expect(envelope.data[0]?.source).toEqual({ kind: "local", value: localDir });
+    expect(envelope.data[0]?.leadAgentId).toBe("codex");
+    expect(envelope.data[1]?.source).toEqual({ kind: "github", value: "https://github.com/example/baton" });
+    expect(envelope.data[1]?.leadAgentId).toBe("claude");
+  });
+
+  it("rejects invalid project create arguments", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "baton-cli-home-"));
+    const errors: string[] = [];
+    const env = { ...process.env, BATON_HOME: homeDir };
+
+    expect(await runCli(["project", "create", "--name", "Bad", "--source-kind", "github", "--source", "https://github.com/example/baton"], { env, stderr: (line) => errors.push(line) })).toBe(1);
+    expect(errors.join("\n")).toContain("Invalid project");
+
+    errors.length = 0;
+    expect(await runCli(["project", "create", "--name", "Bad", "--source-kind", "git", "--source", "x", "--agent", "codex"], { env, stderr: (line) => errors.push(line) })).toBe(1);
+    expect(errors.join("\n")).toContain("baton project create");
   });
 
   it("lists bundled agents and workflows", async () => {

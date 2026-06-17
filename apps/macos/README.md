@@ -13,6 +13,8 @@ read/write CLI contract through subprocess calls:
 - `baton run approve <runId> [--reject]`
 - `baton run resume <runId>`
 - `baton run clean <runId>`
+- `baton project create --name <name> --source-kind <local|github> --source <value> --agent <id> [--agent <id> ...] [--lead <id>]`
+- `baton project list --json`
 
 No HTTP server, socket server, direct `.baton` mutation, credential handling, or
 safety bypass is introduced here. Approval gates and worktree isolation remain
@@ -75,6 +77,23 @@ The app never writes `.baton` directly for run creation. It delegates to the
 Baton CLI so approval gates, worktree isolation, and validation remain owned by
 core.
 
+## New Project
+
+Use `새 프로젝트` to register a project from the GUI:
+
+- `이름` maps to `--name <name>`.
+- `소스` maps to `--source-kind local|github` and `--source <value>`.
+- local sources come from a folder picker or a typed path.
+- GitHub sources are references only; the app stores the URL through the CLI and
+  never clones or contacts GitHub.
+- AI checkboxes map to repeated `--agent <id>` arguments. v0.16 exposes Codex
+  and Claude.
+- when multiple AI agents are selected, `대표` maps to `--lead <id>`. A single
+  selected AI lets core assign the lead automatically.
+
+Project creation and listing use argv arrays through `BatonClient`; the app does
+not mutate `.baton` directly.
+
 ## Manual QA Checklist
 
 SwiftUI UI automation is out of scope for this slice because Xcode UI test
@@ -95,6 +114,12 @@ support is not part of the gate. Verify these manually:
   calls use that path.
 - Confirm a missing `baton` executable shows an error and the app does not crash.
 - Confirm live changes from `baton watch` update the sidebar.
+- Open `새 프로젝트`; confirm empty `이름` or `소스` keeps `다음`/`생성` disabled.
+- Create a local project with the folder picker and confirm it appears in the
+  `프로젝트` list with source, AI badges, and lead.
+- Create a GitHub project using a `https://github.com/owner/repo` URL and confirm
+  it is shown as a reference only.
+- Select both Codex and Claude and confirm `대표` is required before `생성`.
 
 ## Test Coverage
 
@@ -104,6 +129,8 @@ support is not part of the gate. Verify these manually:
 - run list, run detail, state, and watch event fixtures
 - array argv construction for read/write Baton CLI commands
 - form-to-`StartRunOptions` mapping for new run creation
+- `ProjectFormModel` validation and argv-array construction
+- `BatonClient.createProject` and `BatonClient.listProjects` argv/envelope logic
 - `RunsStore.startRun` orchestration and refresh behavior
 - baton executable path resolution
 - Korean status/role display mappings and color tokens
