@@ -1,4 +1,5 @@
 export * from "./project.schema.js";
+export * from "./agentCatalog.schema.js";
 export * from "./agentProfile.schema.js";
 export * from "./workflow.schema.js";
 export * from "./run.schema.js";

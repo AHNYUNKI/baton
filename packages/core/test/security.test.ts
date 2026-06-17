@@ -28,6 +28,23 @@ describe("security regressions", () => {
     }
   });
 
+  it("does not add GitHub clone or network server plumbing for project creation", async () => {
+    const packageFiles = await sourceFiles(packagesRoot);
+    const macOSFiles = await sourceFiles(path.join(repoRoot, "apps", "macos", "Baton", "Sources"), [".swift"]);
+    const content = (await Promise.all([...packageFiles, ...macOSFiles].map((file) => readFile(file, "utf8")))).join("\n");
+    const blockedPatterns = [
+      /\bgit\s+clone\b/iu,
+      /["']clone["']/iu,
+      /\bURLSession\b/u,
+      /\bNWConnection\b/u,
+      /\bNWListener\b/u
+    ];
+
+    for (const pattern of blockedPatterns) {
+      expect(pattern.test(content)).toBe(false);
+    }
+  });
+
   it("keeps run artifact allow-list patterns trackable", async () => {
     const content = await readFile(path.join(repoRoot, ".gitignore"), "utf8");
 
@@ -55,7 +72,7 @@ describe("security regressions", () => {
   });
 });
 
-async function sourceFiles(directory: string): Promise<string[]> {
+async function sourceFiles(directory: string, extensions: readonly string[] = [".ts"]): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = await Promise.all(
     entries.map(async (entry) => {
@@ -63,7 +80,7 @@ async function sourceFiles(directory: string): Promise<string[]> {
       if (entry.isDirectory() && entry.name !== "dist" && entry.name !== "node_modules") {
         return sourceFiles(entryPath);
       }
-      return entry.isFile() && entry.name.endsWith(".ts") ? [entryPath] : [];
+      return entry.isFile() && extensions.some((extension) => entry.name.endsWith(extension)) ? [entryPath] : [];
     })
   );
 

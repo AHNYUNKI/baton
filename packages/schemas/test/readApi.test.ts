@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   JsonEnvelopeSchema,
+  ProjectListEnvelopeSchema,
   RunListEnvelopeSchema,
   WatchEventEnvelopeSchema,
   WatchEventSchema,
@@ -31,6 +32,21 @@ describe("read API schemas", () => {
       data: { runs: [summary], skipped: 0 }
     });
     expect(RunListEnvelopeSchema.safeParse(makeEnvelope("run-list", { runs: [summary], skipped: -1 })).success).toBe(false);
+  });
+
+  it("validates project-list envelopes", () => {
+    const envelope = makeEnvelope("project-list", [
+      {
+        id: "project-1",
+        name: "Baton",
+        source: { kind: "github", value: "https://github.com/example/baton" },
+        agentIds: ["codex", "claude"],
+        leadAgentId: "claude",
+        createdAt: "2026-06-15T00:00:00.000Z"
+      }
+    ]);
+
+    expect(ProjectListEnvelopeSchema.parse(envelope).data).toHaveLength(1);
   });
 
   it("validates watch events and event envelopes", () => {

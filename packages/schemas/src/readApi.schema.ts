@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { ProjectSchema } from "./project.schema.js";
 import { RunSchema, RunStatusSchema } from "./run.schema.js";
 
 export const READ_API_SCHEMA_VERSION = 1;
@@ -93,6 +94,11 @@ export const StateEnvelopeSchema = JsonEnvelopeSchema.extend({
   data: StateJsonSchema
 });
 
+export const ProjectListEnvelopeSchema = JsonEnvelopeSchema.extend({
+  kind: z.literal("project-list"),
+  data: z.array(ProjectSchema)
+});
+
 export const WatchEventEnvelopeSchema = JsonEnvelopeSchema.extend({
   kind: z.literal("event"),
   data: WatchEventSchema
@@ -103,6 +109,7 @@ export type RunListJson = z.infer<typeof RunListJsonSchema>;
 export type RunDetailJson = z.infer<typeof RunDetailJsonSchema>;
 export type RunStatusCountsJson = z.infer<typeof RunStatusCountsJsonSchema>;
 export type StateJson = z.infer<typeof StateJsonSchema>;
+export type ProjectListJson = z.infer<typeof ProjectListEnvelopeSchema>["data"];
 export type WatchEvent = z.infer<typeof WatchEventSchema>;
 
 export type JsonEnvelope<TKind extends string = string, TData = unknown> = {

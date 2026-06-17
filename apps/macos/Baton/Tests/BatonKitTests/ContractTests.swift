@@ -41,6 +41,18 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(envelope.data.recent.map(\.runId), ["completed-new", "running-old"])
     }
 
+    func testDecodesProjectListEnvelope() throws {
+        let json = """
+        {"schemaVersion":1,"kind":"project-list","data":[{"id":"project-1","name":"Baton","source":{"kind":"local","value":"/tmp/baton"},"agentIds":["codex"],"leadAgentId":"codex","createdAt":"2026-06-15T00:00:00.000Z"}]}
+        """
+
+        let envelope = try JSONDecoder().decode(JsonEnvelope<[Project]>.self, from: Data(json.utf8))
+
+        XCTAssertEqual(envelope.kind, "project-list")
+        XCTAssertEqual(envelope.data.first?.source.kind, .local)
+        XCTAssertEqual(envelope.data.first?.agentIds, ["codex"])
+    }
+
     func testDecodesWatchEventNDJSONFixture() throws {
         let text = try fixtureText("watch-events.ndjson")
         let envelopes = try text
