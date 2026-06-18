@@ -42,6 +42,7 @@ describe("TeamRun schema", () => {
       updatedAt: "2026-06-17T00:01:00.000Z",
       worktreePath: "/tmp/baton-worktree",
       baseBranch: "origin/main",
+      diffSummary: "1 file changed, 2 insertions(+)",
       roles: [
         {
           roleId: "architect",
@@ -58,6 +59,30 @@ describe("TeamRun schema", () => {
             estimated: true
           },
           artifacts: ["/tmp/baton-worktree/logs/architect.stdout.log"]
+        }
+      ]
+    });
+
+    expect(TeamRunSchema.parse(teamRun)).toEqual(teamRun);
+  });
+
+  it("accepts awaiting-review team runs with a post-run review approval", () => {
+    const teamRun = teamRunFixture({
+      status: "awaiting-review",
+      diffSummary: "2 files changed, 5 insertions(+), 1 deletion(-)",
+      approvals: [
+        {
+          runId: "team-run-1",
+          stepId: "pre-dispatch",
+          status: "approved",
+          createdAt: "2026-06-17T00:00:00.000Z",
+          decidedAt: "2026-06-17T00:00:00.000Z"
+        },
+        {
+          runId: "team-run-1",
+          stepId: "post-run-review",
+          status: "pending",
+          createdAt: "2026-06-17T00:01:00.000Z"
         }
       ]
     });

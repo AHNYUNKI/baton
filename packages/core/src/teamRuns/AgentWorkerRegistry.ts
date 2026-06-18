@@ -47,15 +47,15 @@ export function createAgentWorkerRegistry({
   fallback = new StubWorker(),
   readOnly = true
 }: AgentWorkerRegistryOptions = {}): AgentWorkerRegistryResult {
-  if (!readOnly && (codex || claude)) {
-    throw new Error("TeamRun real dispatch only supports read-only worker adapters.");
-  }
-
   const registry = new AgentWorkerRegistry(fallback);
   const runnerOption = runner === undefined ? {} : { runner };
+  const codexSandbox = readOnly ? "read-only" : "workspace-write";
+  const claudeOptions = readOnly
+    ? { ...runnerOption, readOnly: true, outputFormat: "json" as const }
+    : { ...runnerOption, readOnly: false, outputFormat: "json" as const, write: true };
 
-  registry.register("codex", codex ? new CodexExecAdapter({ ...runnerOption, sandbox: "read-only" }) : new StubWorker());
-  registry.register("claude", claude ? new ClaudeCodeAdapter({ ...runnerOption, readOnly: true, outputFormat: "json" }) : new StubWorker());
+  registry.register("codex", codex ? new CodexExecAdapter({ ...runnerOption, sandbox: codexSandbox }) : new StubWorker());
+  registry.register("claude", claude ? new ClaudeCodeAdapter(claudeOptions) : new StubWorker());
 
   return {
     registry,

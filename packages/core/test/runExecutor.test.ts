@@ -58,7 +58,8 @@ async function createHarness(workflows: Workflow[], registry: WorkerRegistry, po
   const worktreeManager: WorktreeManager = {
     createWorktree: vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0, durationMs: 1 })),
     removeWorktree: vi.fn(),
-    list: vi.fn()
+    list: vi.fn(),
+    diff: vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0, durationMs: 1 }))
   };
   const runService = new RunService({
     artifactStore,

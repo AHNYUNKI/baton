@@ -13,6 +13,7 @@ import {
   estimateTokens,
   fixedClock,
   type TeamRunProjectService,
+  type ProcessRunResult,
   type WorkerAdapter,
   type WorkerRunInput,
   type WorkerRunResult,
@@ -89,6 +90,72 @@ describe("TeamRunExecutor", () => {
     expect(events.filter((event) => event.type === "teamRun.role.completed").map((event) => event.payload.usage)).toEqual(
       result.teamRun.roles.map((role) => role.usage)
     );
+  });
+
+  it("captures a write diff and waits for post-run review instead of completing", async () => {
+    const harness = await createHarness({ write: true });
+    await harness.executor.start("project-1");
+
+    const result = await harness.executor.decide("team-run-1", { decision: "approved" });
+
+    expect(result.outcome).toBe("awaiting-review");
+    expect(result.teamRun.status).toBe("awaiting-review");
+    expect(result.teamRun.diffSummary).toBe("1 file changed, 2 insertions(+)");
+    expect(result.teamRun.approvals).toEqual([
+      {
+        runId: "team-run-1",
+        stepId: "pre-dispatch",
+        status: "approved",
+        createdAt: "2026-06-17T00:00:00.000Z",
+        decidedAt: "2026-06-17T00:00:00.000Z"
+      },
+      {
+        runId: "team-run-1",
+        stepId: "post-run-review",
+        status: "pending",
+        createdAt: "2026-06-17T00:00:00.000Z"
+      }
+    ]);
+    expect(harness.worktree.diffCalls).toEqual([result.teamRun.worktreePath]);
+    expect(await readFile(path.join(harness.artifactStore.getRunDir("team-run-1"), "diff.patch"), "utf8")).toBe(
+      "diff --git a/file.ts b/file.ts\n+hello\n"
+    );
+
+    const events = await readEvents(harness.artifactStore.getRunDir("team-run-1"));
+    expect(events.map((event) => event.type)).toContain("teamRun.awaitingReview");
+    expect(events.map((event) => event.type)).not.toContain("teamRun.completed");
+  });
+
+  it("accepts post-run review without removing the worktree", async () => {
+    const harness = await createHarness({ write: true });
+    await harness.executor.start("project-1");
+    await harness.executor.decide("team-run-1", { decision: "approved" });
+
+    const result = await harness.executor.review("team-run-1", { decision: "accepted", note: "looks good" });
+
+    expect(result.outcome).toBe("completed");
+    expect(result.teamRun.status).toBe("completed");
+    expect(result.teamRun.approvals?.find((approval) => approval.stepId === "post-run-review")).toMatchObject({
+      status: "approved",
+      note: "looks good"
+    });
+    expect(harness.worktree.removeCalls).toHaveLength(0);
+  });
+
+  it("rejects post-run review by cancelling while preserving the worktree", async () => {
+    const harness = await createHarness({ write: true });
+    await harness.executor.start("project-1");
+    await harness.executor.decide("team-run-1", { decision: "approved" });
+
+    const result = await harness.executor.review("team-run-1", { decision: "rejected", note: "needs changes" });
+
+    expect(result.outcome).toBe("cancelled");
+    expect(result.teamRun.status).toBe("cancelled");
+    expect(result.teamRun.approvals?.find((approval) => approval.stepId === "post-run-review")).toMatchObject({
+      status: "rejected",
+      note: "needs changes"
+    });
+    expect(harness.worktree.removeCalls).toHaveLength(0);
   });
 
   it("relays completed reporting-chain summaries without unrelated sibling context", async () => {
@@ -231,6 +298,26 @@ describe("TeamRunExecutor", () => {
     expect(harness.worker.inputs).toHaveLength(0);
   });
 
+  it("keeps awaiting-review runs gated on resume", async () => {
+    const harness = await createHarness({ write: true });
+    await harness.executor.start("project-1");
+    await harness.executor.decide("team-run-1", { decision: "approved" });
+    harness.worker.inputs.length = 0;
+
+    const result = await harness.executor.resume("team-run-1");
+
+    expect(result.outcome).toBe("awaiting-review");
+    expect(result.teamRun.status).toBe("awaiting-review");
+    expect(harness.worker.inputs).toHaveLength(0);
+  });
+
+  it("rejects post-run review when the team run is not awaiting review", async () => {
+    const harness = await createHarness();
+    await harness.executor.start("project-1");
+
+    await expect(harness.executor.review("team-run-1", { decision: "accepted" })).rejects.toThrow("post-run review");
+  });
+
   it("records worktree creation failures as failed team runs", async () => {
     const harness = await createHarness({ worktreeExitCode: 1, worktreeStderr: "no base" });
 
@@ -256,6 +343,8 @@ type HarnessOptions = {
   worktreeStderr?: string;
   teamPlan?: TeamPlan;
   relayMaxChars?: number;
+  write?: boolean;
+  diffResult?: Partial<ProcessRunResult>;
 };
 
 async function createHarness(options: HarnessOptions = {}): Promise<{
@@ -271,7 +360,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<{
   const teamRunStore = new TeamRunStore({ artifactStore, clock: fixedClock("2026-06-17T00:00:00.000Z") });
   const worker = new RecordingWorker(options.workerResults);
   const registry = new AgentWorkerRegistry().register("codex", worker);
-  const worktree = new RecordingWorktreeManager(options.worktreeExitCode ?? 0, options.worktreeStderr ?? "");
+  const worktree = new RecordingWorktreeManager(options.worktreeExitCode ?? 0, options.worktreeStderr ?? "", options.diffResult);
 
   return {
     workspaceRoot,
@@ -287,6 +376,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<{
       agentWorkerRegistry: registry,
       clock: fixedClock("2026-06-17T00:00:00.000Z"),
       idGenerator: () => "team-run-1",
+      write: options.write === true,
       ...(options.relayMaxChars === undefined ? {} : { relayMaxChars: options.relayMaxChars })
     })
   };
@@ -317,8 +407,14 @@ class RecordingWorker implements WorkerAdapter {
 
 class RecordingWorktreeManager implements WorktreeManager {
   public readonly calls: Array<{ runId: string; worktreePath: string; baseBranch?: string }> = [];
+  public readonly diffCalls: string[] = [];
+  public readonly removeCalls: string[] = [];
 
-  public constructor(private readonly exitCode: number, private readonly stderr: string) {}
+  public constructor(
+    private readonly exitCode: number,
+    private readonly stderr: string,
+    private readonly diffResult: Partial<ProcessRunResult> = {}
+  ) {}
 
   public async createWorktree(input: { runId: string; worktreePath: string; baseBranch?: string }): Promise<{
     stdout: string;
@@ -330,12 +426,24 @@ class RecordingWorktreeManager implements WorktreeManager {
     return { stdout: "", stderr: this.stderr, exitCode: this.exitCode, durationMs: 1 };
   }
 
-  public async removeWorktree(): Promise<{ stdout: string; stderr: string; exitCode: number; durationMs: number }> {
+  public async removeWorktree(worktreePath: string): Promise<{ stdout: string; stderr: string; exitCode: number; durationMs: number }> {
+    this.removeCalls.push(worktreePath);
     return { stdout: "", stderr: "", exitCode: 0, durationMs: 1 };
   }
 
   public async list(): Promise<{ stdout: string; stderr: string; exitCode: number; durationMs: number }> {
     return { stdout: "", stderr: "", exitCode: 0, durationMs: 1 };
+  }
+
+  public async diff(worktreePath: string): Promise<ProcessRunResult> {
+    this.diffCalls.push(worktreePath);
+    return {
+      stdout: this.diffResult.stdout ?? "diff --git a/file.ts b/file.ts\n+hello\n",
+      stderr: this.diffResult.stderr ?? "",
+      exitCode: this.diffResult.exitCode ?? 0,
+      durationMs: this.diffResult.durationMs ?? 1,
+      metadata: this.diffResult.metadata ?? { diffStat: " file.ts | 2 ++\n 1 file changed, 2 insertions(+)\n" }
+    };
   }
 }
 

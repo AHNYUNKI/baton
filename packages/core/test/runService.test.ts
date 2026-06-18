@@ -31,7 +31,8 @@ describe("RunService", () => {
     const worktreeManager: WorktreeManager = {
       createWorktree: vi.fn(),
       removeWorktree: vi.fn(),
-      list: vi.fn()
+      list: vi.fn(),
+      diff: vi.fn()
     };
     const service = new RunService({
       artifactStore: new ArtifactStore({ workspaceRoot }),

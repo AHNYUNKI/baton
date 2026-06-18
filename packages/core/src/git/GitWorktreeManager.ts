@@ -10,6 +10,7 @@ export type WorktreeManager = {
   createWorktree(input: CreateWorktreeInput): Promise<ProcessRunResult>;
   removeWorktree(worktreePath: string): Promise<ProcessRunResult>;
   list(): Promise<ProcessRunResult>;
+  diff(worktreePath: string): Promise<ProcessRunResult>;
 };
 
 export type GitWorktreeManagerOptions = {
@@ -43,7 +44,44 @@ export class GitWorktreeManager implements WorktreeManager {
     return this.runner.run("git", ["worktree", "list", "--porcelain"], this.runnerOptions());
   }
 
+  public async diff(worktreePath: string): Promise<ProcessRunResult> {
+    const add = await this.runner.run("git", ["-C", worktreePath, "add", "-A"], this.runnerOptions());
+    if (add.exitCode !== 0) {
+      return withDiffStat(add, "");
+    }
+
+    const stat = await this.runner.run("git", ["-C", worktreePath, "--no-pager", "diff", "--cached", "--stat"], this.runnerOptions());
+    if (stat.exitCode !== 0) {
+      return combineDiffResults([add, stat], stat.stdout, stat.exitCode);
+    }
+
+    const patch = await this.runner.run("git", ["-C", worktreePath, "--no-pager", "diff", "--cached"], this.runnerOptions());
+    return combineDiffResults([add, stat, patch], patch.stdout, patch.exitCode, stat.stdout);
+  }
+
   private runnerOptions(): ProcessRunOptions | undefined {
     return this.repoRoot === undefined ? undefined : { cwd: this.repoRoot };
   }
+}
+
+function combineDiffResults(
+  results: readonly ProcessRunResult[],
+  stdout: string,
+  exitCode: number | null,
+  diffStat = ""
+): ProcessRunResult {
+  return {
+    stdout,
+    stderr: results.map((result) => result.stderr).filter((value) => value.trim().length > 0).join("\n"),
+    exitCode,
+    durationMs: results.reduce((sum, result) => sum + result.durationMs, 0),
+    metadata: { diffStat }
+  };
+}
+
+function withDiffStat(result: ProcessRunResult, diffStat: string): ProcessRunResult {
+  return {
+    ...result,
+    metadata: { ...(result.metadata ?? {}), diffStat }
+  };
 }

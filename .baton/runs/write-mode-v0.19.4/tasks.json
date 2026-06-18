@@ -1,0 +1,56 @@
+{
+  "version": "1",
+  "runId": "write-mode-v0.19.4",
+  "buildsOn": "real-dispatch-v0.19.3",
+  "baseBranch": "origin/main",
+  "language": "typescript",
+  "gates": ["pnpm typecheck", "pnpm test", "pnpm build"],
+  "notes": "opt-in 쓰기 모드(--write+provider). worktree 격리, codex workspace-write/claude acceptEdits. 이중 게이트(pre-dispatch + post-run diff review→accept/reject). 자동 머지/푸시/revert 없음. 기본 읽기전용/stub 회귀 0. Swift는 다음 순서. 종단 수동 QA, 단위 mock runner.",
+  "tasks": [
+    {
+      "id": "task-W01",
+      "title": "스키마: awaiting-review 상태 + diffSummary?",
+      "description": "packages/schemas/src/teamRun.schema.ts: TeamRunStatusSchema에 'awaiting-review' 추가. TeamRunSchema에 diffSummary: z.string().optional() 추가. team-run/readApi 봉투 회귀 0. 테스트: awaiting-review 수용, diffSummary 부재/존재, 봉투 round-trip.",
+      "targetFiles": ["packages/schemas/src/teamRun.schema.ts", "packages/schemas/test/teamRun.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-06", "AC-13", "AC-14"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test"]
+    },
+    {
+      "id": "task-W02",
+      "title": "WorktreeManager.diff (누적 변경 캡처)",
+      "description": "packages/core/src/git/GitWorktreeManager.ts: WorktreeManager 타입 + GitWorktreeManager에 diff(worktreePath): Promise<ProcessRunResult> 추가. 미커밋 변경 전부 캡처(예: git -C <wt> add -A 후 git -C <wt> --no-pager diff --cached, 그리고 --stat 요약). ProcessRunner 주입 유지. 테스트(mock runner): 올바른 git 인자/cwd 호출.",
+      "targetFiles": ["packages/core/src/git/GitWorktreeManager.ts", "packages/core/test/git/gitWorktreeManager.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-07"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-W03",
+      "title": "write 경로: dispatchConfig + ClaudeCodeAdapter + AgentWorkerRegistry",
+      "description": "dispatchConfig.ts: write: boolean 필드(read/write/validate 반영). ClaudeCodeAdapter.ts: write 편집 모드 옵션(--permission-mode acceptEdits; 정확값 claude --help 확인; --dangerously-skip-permissions 금지). 읽기전용(plan)/기본(--print) 보존. AgentWorkerRegistry.ts: readOnly=false(write) 경로 — codex new CodexExecAdapter({sandbox:'workspace-write'}), claude new ClaudeCodeAdapter({readOnly:false, outputFormat:'json', write:true}); v0.19.3 write throw 제거/완화. 미지정/읽기전용은 그대로. 테스트: write wiring(codex workspace-write/claude acceptEdits 인자), 읽기전용 보존, config write round-trip.",
+      "targetFiles": ["packages/core/src/teamRuns/dispatchConfig.ts", "packages/core/src/workers/claude/ClaudeCodeAdapter.ts", "packages/core/src/teamRuns/AgentWorkerRegistry.ts", "packages/core/test/claudeCodeAdapter.test.ts", "packages/core/test/teamRuns/agentWorkerRegistry.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-03", "AC-04", "AC-10"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-W04",
+      "title": "TeamRunExecutor: diff 캡처→awaiting-review + review()",
+      "description": "packages/core/src/teamRuns/TeamRunExecutor.ts: executeFrom 완료 분기 — write 모드면 worktreeManager.diff(worktreePath) → 아티팩트 diff.patch 기록 + diffSummary 산출 → status 'awaiting-review' + pending review approval(stepId 'post-run-review'); 읽기전용/stub은 종전대로 completed. 신규 review(teamRunId,{decision:'accepted'|'rejected',note?}): post-run-review pending 검증 → accepted→completed / rejected→cancelled, 파일 변경 없음(worktree 보존), 이벤트 teamRun.review.*. resume: awaiting-review면 게이트 유지. index export. 테스트: write 완료→awaiting-review+diff 아티팩트, review accept→completed/reject→cancelled+worktree 보존(removeWorktree 미호출), 읽기전용→직행 completed(회귀), 잘못된 review 오류.",
+      "targetFiles": ["packages/core/src/teamRuns/TeamRunExecutor.ts", "packages/core/src/index.ts", "packages/core/test/teamRuns/teamRunExecutor.test.ts"],
+      "dependencies": ["task-W01", "task-W02", "task-W03"],
+      "acceptanceCriteria": ["AC-05", "AC-08", "AC-09", "AC-11", "AC-12"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-W05",
+      "title": "CLI: --write + plan run review + diff 표시",
+      "description": "packages/cli/src/commands/project.ts: plan run start에 --write 추가(provider 플래그와 함께만 의미; 없으면 읽기전용/stub). dispatchConfig write 영속→approve 적용. 신규 plan run review <teamRunId> --accept|--reject [--note] [--json] → executor.review. show: awaiting-review면 diffSummary + 'baton project plan run review <id> --accept|--reject' 안내 + diff.patch 경로. 도움말 갱신. 테스트(mock runner): --write→workspace-write 경로, 실행 후 awaiting-review, review accept/reject, 읽기전용은 review 없이 완료.",
+      "targetFiles": ["packages/cli/src/commands/project.ts", "packages/cli/src/main.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-W04"],
+      "acceptanceCriteria": ["AC-02", "AC-08", "AC-09"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build"]
+    }
+  ]
+}
