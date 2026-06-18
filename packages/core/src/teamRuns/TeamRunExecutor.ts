@@ -13,6 +13,7 @@ import type { ProcessRunResult } from "../ports/ProcessRunner.js";
 import type { WorkerRunResult } from "../workers/WorkerAdapter.js";
 import { buildRolePrompt, type UpstreamContextEntry } from "./buildRolePrompt.js";
 import { collectUpstreamRoleIds } from "./collectUpstream.js";
+import { extractExplanation } from "./explanation.js";
 import { computeExecutionOrder } from "./order.js";
 import { summarizeWorkerResult } from "./summarizeResult.js";
 import { readOrEstimateUsage } from "./usage.js";
@@ -284,8 +285,9 @@ export class TeamRunExecutor {
       const status: TeamRunRole["status"] = result.success ? "completed" : "failed";
       const reason = roleReason(result, registeredAgent, roleState.assignedAgentId);
       const summary = result.success ? summarizeWorkerResult(result, this.relayMaxChars) : undefined;
+      const explanation = extractExplanation(result.stdout);
       const usage = readOrEstimateUsage(invocation.prompt, result);
-      const { summary: _previousSummary, ...roleWithoutSummary } = teamRun.roles[roleIndex] ?? roleState;
+      const { summary: _previousSummary, explanation: _previousExplanation, ...roleWithoutSummary } = teamRun.roles[roleIndex] ?? roleState;
       teamRun = replaceRole(teamRun, roleIndex, {
         ...roleWithoutSummary,
         status,
@@ -293,6 +295,7 @@ export class TeamRunExecutor {
         artifacts: roleArtifacts,
         usage,
         ...(summary === undefined ? {} : { summary }),
+        ...(explanation === undefined ? {} : { explanation }),
         ...(reason === undefined ? {} : { reason })
       });
       await this.roleEvent(teamRun, result.success ? "teamRun.role.completed" : "teamRun.role.failed", roleId, {

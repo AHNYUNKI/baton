@@ -147,6 +147,7 @@ function teamRunFixture(): TeamRun {
         name: "Lead",
         assignedAgentId: "claude",
         status: "completed",
+        explanation: "## 학습 설명\n- 무엇을 했나: 리드 역할을 설명했습니다.",
         usage: {
           inputTokens: 12,
           outputTokens: 4,

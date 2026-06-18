@@ -889,6 +889,7 @@ function printTeamRunResult(teamRun: TeamRun, json: boolean, context: CommandCon
   }
   for (const role of teamRun.roles) {
     context.stdout(`- ${role.roleId}: ${role.name} (${role.status})${role.reason === undefined ? "" : ` - ${role.reason}`}`);
+    printRoleExplanation(role.explanation, context);
   }
   if (options.includeUsage === true) {
     printTeamRunUsage(teamRun, context);
@@ -899,6 +900,17 @@ function printTeamRunResult(teamRun: TeamRun, json: boolean, context: CommandCon
   if (teamRun.status === "awaiting-review") {
     context.stdout(`검토 대기: baton project plan run review ${teamRun.id} --accept|--reject`);
     context.stdout(`Diff artifact: ${path.join(new ArtifactStore({ workspaceRoot: context.cwd }).getRunDir(teamRun.id), "diff.patch")}`);
+  }
+}
+
+function printRoleExplanation(explanation: string | undefined, context: CommandContext): void {
+  const trimmed = explanation?.trim();
+  if (trimmed === undefined || trimmed.length === 0) {
+    return;
+  }
+
+  for (const line of trimmed.split(/\r?\n/)) {
+    context.stdout(`  ${line}`);
   }
 }
 
