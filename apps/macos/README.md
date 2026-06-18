@@ -62,6 +62,15 @@ v0.19.5 turns the project `실행` tab into a TeamRun monitor:
 - approval and diff review gates expose Korean actions while keeping CLI/core safety
 - `baton watch` refreshes the selected TeamRun and feeds the org chart status map
 
+v0.19.6 scopes local project detail actions to the project source path:
+
+- local project detail, TeamPlan, TeamRun, and watch commands run with
+  `source.value` as the Baton CLI working directory
+- GitHub project sources remain references only and keep the default working
+  directory behavior
+- dashboard, project list, and global run list views continue to use the
+  existing global client
+
 See `UX.md` for the shared macOS design language and manual QA checklist.
 
 ## Build
@@ -82,8 +91,8 @@ swift test
 
 ## Run
 
-Run the app from the Baton workspace you want the CLI to inspect so the
-subprocess inherits that working directory:
+Run the app from the Baton workspace you want the global dashboard and run list
+to inspect so those subprocesses inherit that working directory:
 
 ```bash
 swift run --package-path apps/macos/Baton BatonApp
@@ -93,6 +102,10 @@ The app uses `baton` on `PATH` by default. Open `설정` to provide a custom Bat
 CLI executable path. Blank settings resolve back to `baton`. If the executable
 is not found, `BatonClient` surfaces a clear error instead of reading
 credentials or falling back to private state.
+
+When a local project is selected, project detail actions use that project's
+stored local source path as `baton`'s working directory. GitHub project sources
+are not cloned or scoped.
 
 ## New Run
 
@@ -132,6 +145,7 @@ Select a project to draft and edit its TeamPlan:
 
 - `개요` maps to `baton project plan generate <projectId> --overview <text>`.
 - `대표에게 맡기기` is the only action that invokes the configured lead AI.
+- local projects run plan commands from the stored local source path.
 - generated roles are decoded from the `team-plan` envelope and shown for review.
 - each role may keep an optional `reportsTo` role id; `대표` maps to no parent.
 - role edits stay local until `저장`.
@@ -147,6 +161,8 @@ Select a project and open `실행` to inspect and operate the current TeamRun:
 - `TeamRun` picker defaults to the newest `createdAt`.
 - `시작` calls `baton project plan run start <projectId> --json`; `Codex`,
   `Claude`, `쓰기`, `base branch`, and `timeout ms` map directly to CLI flags.
+- local projects run TeamRun list/show/start/approve/reject/review and
+  `baton watch` from the stored local source path.
 - when status is `awaiting-approval`, `승인` and `거부` call the corresponding
   CLI decision command with an optional note.
 - when status is `awaiting-review`, the view shows `diffSummary`, points to
@@ -228,6 +244,8 @@ support is not part of the gate. Verify these manually:
   and review accept/reject actions are visible.
 - Confirm `baton watch` or `새로고침` updates the execution monitor and the
   `조직도` node statuses.
+- Confirm a local project selected from the sidebar shows CLI-created TeamRuns
+  from that project's repository rather than the app launch directory.
 - Edit a role name, description, 담당 AI, and 지침; add and delete a role; confirm
   invalid plans keep `저장` disabled.
 - Save the TeamPlan and confirm the project card shows the role count after refresh.

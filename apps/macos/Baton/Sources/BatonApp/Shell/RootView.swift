@@ -142,7 +142,7 @@ struct RootView: View {
             if let project = projects.first(where: { $0.id == id }) {
                 ProjectDetailView(
                     project: project,
-                    client: makeClient(),
+                    batonExecutablePreference: batonExecutablePreference,
                     selectedTab: Binding(
                         get: { navigation.projectTab },
                         set: { navigation.selectTab($0) }
