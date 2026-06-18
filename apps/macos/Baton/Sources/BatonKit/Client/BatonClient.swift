@@ -85,6 +85,28 @@ public struct ResumeRunOptions: Equatable, Sendable {
     }
 }
 
+public struct StartTeamRunOptions: Equatable, Sendable {
+    public var codex: Bool
+    public var claude: Bool
+    public var write: Bool
+    public var baseBranch: String?
+    public var timeoutMs: Int?
+
+    public init(
+        codex: Bool = false,
+        claude: Bool = false,
+        write: Bool = false,
+        baseBranch: String? = nil,
+        timeoutMs: Int? = nil
+    ) {
+        self.codex = codex
+        self.claude = claude
+        self.write = write
+        self.baseBranch = baseBranch
+        self.timeoutMs = timeoutMs
+    }
+}
+
 public protocol BatonClientProtocol: Sendable {
     func listRuns() async throws -> RunList
     func runDetail(id: String) async throws -> RunDetail
@@ -145,6 +167,42 @@ public struct BatonClient: Sendable {
 
     public func showTeamPlan(projectId: String) async throws -> TeamPlan {
         try await decodeJSON(arguments: ["project", "plan", "show", projectId, "--json"], expectedKind: "team-plan")
+    }
+
+    public func listTeamRuns(projectId: String) async throws -> TeamRunList {
+        try await decodeJSON(arguments: ["project", "plan", "run", "list", projectId, "--json"], expectedKind: "team-run-list")
+    }
+
+    public func showTeamRun(teamRunId: String) async throws -> TeamRun {
+        try await decodeJSON(arguments: ["project", "plan", "run", "show", teamRunId, "--json"], expectedKind: "team-run")
+    }
+
+    @discardableResult
+    public func startTeamRun(projectId: String, options: StartTeamRunOptions = StartTeamRunOptions()) async throws -> TeamRun {
+        var arguments = ["project", "plan", "run", "start", projectId]
+        appendStartTeamRunOptions(options, to: &arguments)
+        arguments.append("--json")
+        return try await decodeJSON(arguments: arguments, expectedKind: "team-run")
+    }
+
+    @discardableResult
+    public func approveTeamRun(teamRunId: String, reject: Bool = false, note: String? = nil) async throws -> TeamRun {
+        var arguments = ["project", "plan", "run", reject ? "reject" : "approve", teamRunId]
+        if let note, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            arguments.append(contentsOf: ["--note", note])
+        }
+        arguments.append("--json")
+        return try await decodeJSON(arguments: arguments, expectedKind: "team-run")
+    }
+
+    @discardableResult
+    public func reviewTeamRun(teamRunId: String, accept: Bool, note: String? = nil) async throws -> TeamRun {
+        var arguments = ["project", "plan", "run", "review", teamRunId, accept ? "--accept" : "--reject"]
+        if let note, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            arguments.append(contentsOf: ["--note", note])
+        }
+        arguments.append("--json")
+        return try await decodeJSON(arguments: arguments, expectedKind: "team-run")
     }
 
     @discardableResult
@@ -309,6 +367,24 @@ public struct BatonClient: Sendable {
         appendBooleanOption(options.fixEnabled, positive: "--fix", negative: "--no-fix", to: &arguments)
         if let maxFixAttempts = options.maxFixAttempts {
             arguments.append(contentsOf: ["--max-fix-attempts", String(maxFixAttempts)])
+        }
+    }
+
+    private func appendStartTeamRunOptions(_ options: StartTeamRunOptions, to arguments: inout [String]) {
+        if options.codex {
+            arguments.append("--codex")
+        }
+        if options.claude {
+            arguments.append("--claude")
+        }
+        if options.write {
+            arguments.append("--write")
+        }
+        if let baseBranch = options.baseBranch?.trimmingCharacters(in: .whitespacesAndNewlines), !baseBranch.isEmpty {
+            arguments.append(contentsOf: ["--base", baseBranch])
+        }
+        if let timeoutMs = options.timeoutMs {
+            arguments.append(contentsOf: ["--timeout-ms", String(timeoutMs)])
         }
     }
 

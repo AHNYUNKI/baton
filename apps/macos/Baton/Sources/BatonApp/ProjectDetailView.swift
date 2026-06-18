@@ -7,6 +7,12 @@ struct ProjectDetailView: View {
     @Binding var selectedTab: AppNavigationModel.ProjectTab
     let onSaved: () -> Void
 
+    @State private var teamRunMonitor = TeamRunMonitorModel()
+    @State private var teamRunMonitorError: String?
+    @State private var teamRunWatchMessage: String?
+    @State private var isTeamRunMonitorLoading = false
+    @State private var teamRunWatchTask: Task<Void, Never>?
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -18,6 +24,15 @@ struct ProjectDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(BatonTheme.background)
+        .task(id: project.id) {
+            await refreshTeamRunMonitor()
+        }
+        .onAppear {
+            startTeamRunWatch()
+        }
+        .onDisappear {
+            stopTeamRunWatch()
+        }
     }
 
     private var header: some View {
@@ -82,9 +97,17 @@ struct ProjectDetailView: View {
         case .plan:
             ProjectPlanView(project: project, client: client, onSaved: onSaved)
         case .org:
-            OrgChartView(chart: OrgChartModel.buildOrgChart(project: project))
+            OrgChartView(chart: OrgChartModel.buildOrgChart(project: project, statusByRole: teamRunMonitor.statusByRole))
         case .run:
-            runPlaceholder
+            ExecutionView(
+                project: project,
+                client: client,
+                monitor: $teamRunMonitor,
+                isLoading: isTeamRunMonitorLoading,
+                monitorErrorMessage: teamRunMonitorError,
+                watchMessage: teamRunWatchMessage,
+                onRefresh: refreshTeamRunMonitor
+            )
         }
     }
 
@@ -125,24 +148,6 @@ struct ProjectDetailView: View {
         }
     }
 
-    private var runPlaceholder: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Label("실행", systemImage: "play.circle")
-                .font(.system(size: 30, weight: .heavy))
-                .foregroundStyle(BatonTheme.cream)
-            Text("TeamPlan 실행 엔진은 v0.19 범위입니다.")
-                .font(.title3)
-                .foregroundStyle(BatonTheme.muted)
-            Text("이 탭은 프로젝트 팀 구성이 실행 흐름으로 연결될 위치를 예약합니다. 현재 v0.18에서는 실행/디스패치 로직을 추가하지 않습니다.")
-                .font(.body)
-                .foregroundStyle(BatonTheme.cream)
-                .frame(maxWidth: 620, alignment: .leading)
-        }
-        .padding(34)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(BatonTheme.background)
-    }
-
     private var sourceLabel: String {
         switch project.source.kind {
         case .local:
@@ -177,5 +182,44 @@ struct ProjectDetailView: View {
             .padding(.vertical, 5)
             .background(BatonTheme.surfaceElevated)
             .clipShape(Capsule())
+    }
+
+    @MainActor
+    private func refreshTeamRunMonitor() async {
+        isTeamRunMonitorLoading = true
+        defer { isTeamRunMonitorLoading = false }
+
+        do {
+            let list = try await client.listTeamRuns(projectId: project.id)
+            teamRunMonitor.setSummaries(list.teamRuns)
+            if let teamRunId = teamRunMonitor.selected?.teamRunId {
+                let current = try await client.showTeamRun(teamRunId: teamRunId)
+                teamRunMonitor.setCurrent(current)
+            }
+            teamRunMonitorError = nil
+        } catch {
+            teamRunMonitorError = error.localizedDescription
+        }
+    }
+
+    private func startTeamRunWatch() {
+        stopTeamRunWatch()
+        teamRunWatchTask = Task { @MainActor in
+            do {
+                for try await event in client.watch(intervalSeconds: 1, once: false) {
+                    teamRunWatchMessage = "\(event.type.rawValue) · \(event.runId)"
+                    await refreshTeamRunMonitor()
+                }
+            } catch {
+                if !Task.isCancelled {
+                    teamRunMonitorError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func stopTeamRunWatch() {
+        teamRunWatchTask?.cancel()
+        teamRunWatchTask = nil
     }
 }
