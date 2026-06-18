@@ -310,7 +310,7 @@ private struct OrgChartStatusBadge: View {
 }
 
 private struct OrgChartLegend: View {
-    private let statuses = ["planned", "running", "awaiting-approval", "completed", "failed"]
+    private let statuses = ["planned", "running", "awaiting-approval", "awaiting-review", "completed", "failed"]
     private let agents = ["claude", "codex"]
 
     var body: some View {
@@ -343,6 +343,8 @@ private enum OrgChartPresentation {
             "실행 중"
         case "awaiting-approval":
             "승인 대기"
+        case "awaiting-review":
+            "검토 대기"
         case "completed":
             "완료"
         case "failed":
@@ -358,7 +360,7 @@ private enum OrgChartPresentation {
         switch status {
         case "running":
             .running
-        case "awaiting-approval":
+        case "awaiting-approval", "awaiting-review":
             .awaitingApproval
         case "completed":
             .completed

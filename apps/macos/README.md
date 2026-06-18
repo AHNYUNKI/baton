@@ -18,6 +18,11 @@ read/write CLI contract through subprocess calls:
 - `baton project plan generate <projectId> --overview <text>`
 - `baton project plan show <projectId> --json`
 - `baton project plan set <projectId> --file <path>`
+- `baton project plan run start <projectId> [--codex] [--claude] [--write] [--base <branch>] [--timeout-ms <ms>] --json`
+- `baton project plan run approve|reject <teamRunId> [--note <text>] --json`
+- `baton project plan run review <teamRunId> --accept|--reject [--note <text>] --json`
+- `baton project plan run show <teamRunId> --json`
+- `baton project plan run list <projectId> --json`
 
 No HTTP server, socket server, direct `.baton` mutation, credential handling, or
 safety bypass is introduced here. Approval gates and worktree isolation remain
@@ -39,7 +44,7 @@ v0.18 adds the Paperclip-style app shell:
 - `받은 함` collects only `awaiting-approval` runs from the existing run list
 - project detail tabs: `개요`, `계획`, `조직도`, `실행`
 - `조직도` renders the existing TeamPlan as lead AI + role nodes
-- `실행` is intentionally a placeholder until the v0.19 execution engine work
+- `실행` hosts the TeamRun execution monitor in v0.19.5 and later
 
 v0.18.3 extends TeamPlan with optional `reportsTo` hierarchy:
 
@@ -48,6 +53,14 @@ v0.18.3 extends TeamPlan with optional `reportsTo` hierarchy:
 - valid `reportsTo` role ids render as nested manager/report branches
 - missing, self-referential, or cyclic parent references are displayed as
   representative-direct instead of failing the app
+
+v0.19.5 turns the project `실행` tab into a TeamRun monitor:
+
+- TeamRun list/show/start/approve/reject/review all go through the existing CLI
+- provider toggles (`Codex`, `Claude`) and `쓰기` default off, so start begins in stub mode
+- role rows show live status, assigned AI, summary, artifacts, and token usage
+- approval and diff review gates expose Korean actions while keeping CLI/core safety
+- `baton watch` refreshes the selected TeamRun and feeds the org chart status map
 
 See `UX.md` for the shared macOS design language and manual QA checklist.
 
@@ -124,8 +137,26 @@ Select a project to draft and edit its TeamPlan:
 - role edits stay local until `저장`.
 - `저장` writes a temporary JSON file and calls `baton project plan set <projectId> --file <path>`.
 
-The app does not execute the plan. v0.17 only supports draft generation, human
-review/editing, and persistence.
+The TeamPlan editor only drafts, reviews, edits, and persists plans. Execution
+is handled separately by the `실행` tab through the TeamRun CLI commands.
+
+## TeamRun Execution Monitor
+
+Select a project and open `실행` to inspect and operate the current TeamRun:
+
+- `TeamRun` picker defaults to the newest `createdAt`.
+- `시작` calls `baton project plan run start <projectId> --json`; `Codex`,
+  `Claude`, `쓰기`, `base branch`, and `timeout ms` map directly to CLI flags.
+- when status is `awaiting-approval`, `승인` and `거부` call the corresponding
+  CLI decision command with an optional note.
+- when status is `awaiting-review`, the view shows `diffSummary`, points to
+  `.baton/runs/<teamRunId>/diff.patch`, and calls review accept/reject.
+- token usage is displayed per role and in total when the CLI provides usage.
+- `baton watch` events trigger `show` refreshes; manual `새로고침` remains the
+  fallback.
+
+The monitor does not read credentials, open HTTP connections, or mutate
+`.baton` directly.
 
 ## App Shell and Org Chart
 
@@ -137,12 +168,12 @@ The org chart is a read-only visualization of already persisted project data:
 
 - lead: `Project.leadAgentId`, or the single project agent when no lead is set
 - roles: `Project.teamPlan.roles`, nested by optional `TeamRole.reportsTo`
-- node state: static `planned` unless a caller supplies a role status map
+- node state: static `planned` unless the current TeamRun supplies a role status map
 - hierarchy defense: missing parents, self references, and cycle participants are
   treated as representative-direct roots
 
-No execution dispatch, live role lighting, HTTP call, or direct `.baton` write is
-introduced in v0.18.
+Live role lighting is label-backed, not color-only. `awaiting-review` is shown
+as `검토 대기`.
 
 ## Manual QA Checklist
 
@@ -186,8 +217,17 @@ support is not part of the gate. Verify these manually:
 - Confirm missing `reportsTo` and invalid parent references still render as
   representative-direct roles.
 - Edit a role's `보고 대상`, save, refresh, and confirm the hierarchy is preserved.
-- Confirm the `실행` tab says the TeamPlan execution engine is v0.19 and does
-  not start dispatching work.
+- Confirm the `실행` tab loads TeamRuns, defaults to the newest run, and shows
+  role status labels, assigned AI, summary, token usage, worktree, and diff info.
+- Start a TeamRun with all toggles off and confirm it uses stub mode; then test
+  `Codex`, `Claude`, `쓰기`, `base branch`, and `timeout ms` only in a safe
+  workspace.
+- On `승인 대기`, trigger `승인` and `거부` and confirm the selected TeamRun
+  refreshes.
+- On `검토 대기`, confirm `diffSummary`, `.baton/runs/<teamRunId>/diff.patch`,
+  and review accept/reject actions are visible.
+- Confirm `baton watch` or `새로고침` updates the execution monitor and the
+  `조직도` node statuses.
 - Edit a role name, description, 담당 AI, and 지침; add and delete a role; confirm
   invalid plans keep `저장` disabled.
 - Save the TeamPlan and confirm the project card shows the role count after refresh.
@@ -214,6 +254,9 @@ support is not part of the gate. Verify these manually:
 - pure app navigation transitions for sidebar sections and project tabs
 - pure TeamPlan-to-org-chart mapping, including no-plan and single-agent lead cases
 - pure inbox filtering for `awaiting-approval` runs
+- TeamRun contract decoding for `team-run`/`team-run-list`
+- TeamRun BatonClient argv/envelope behavior
+- pure TeamRun status-by-role, Korean label, and monitor selection/gate logic
 
 The SwiftUI views are kept thin and compile through `swift build`; detailed UI
 behavior remains manual QA for this milestone.
