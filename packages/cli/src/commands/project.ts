@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 import {
   ArtifactStore,
@@ -140,12 +141,20 @@ type ParsedPlanRunStartArgs = {
   baseBranch?: string;
   codex: boolean;
   claude: boolean;
+  write: boolean;
   timeoutMs?: number;
   json: boolean;
 };
 
 type ParsedPlanRunDecisionArgs = {
   teamRunId: string;
+  note?: string;
+  json: boolean;
+};
+
+type ParsedPlanRunReviewArgs = {
+  teamRunId: string;
+  decision: "accepted" | "rejected";
   note?: string;
   json: boolean;
 };
@@ -297,6 +306,15 @@ async function projectPlanRunCommand(args: readonly string[], context: CommandCo
     return decideTeamRun(parsed, "rejected", context, service);
   }
 
+  if (subcommand === "review") {
+    const parsed = parsePlanRunReviewArgs(rest);
+    if (parsed === undefined) {
+      context.stderr(projectUsage());
+      return 1;
+    }
+    return reviewTeamRun(parsed, context, service);
+  }
+
   if (subcommand === "show") {
     const parsed = parsePlanRunShowArgs(rest);
     if (parsed === undefined) {
@@ -359,6 +377,17 @@ async function decideTeamRun(
 
   printTeamRunResult(result.teamRun, args.json, context);
   return result.outcome === "failed" ? 1 : 0;
+}
+
+async function reviewTeamRun(args: ParsedPlanRunReviewArgs, context: CommandContext, service: ProjectService): Promise<CommandResult> {
+  const { executor } = createTeamRunExecutor(context, service);
+  const result = await executor.review(args.teamRunId, {
+    decision: args.decision,
+    ...(args.note === undefined ? {} : { note: args.note })
+  });
+
+  printTeamRunResult(result.teamRun, args.json, context);
+  return 0;
 }
 
 async function showTeamRun(args: ParsedPlanRunShowArgs, context: CommandContext): Promise<CommandResult> {
@@ -443,6 +472,7 @@ function dispatchConfigFromStartArgs(args: ParsedPlanRunStartArgs): TeamRunDispa
   return createTeamRunDispatchConfig({
     codex: args.codex,
     claude: args.claude,
+    write: args.write,
     ...(timeoutMs === undefined ? {} : { timeoutMs })
   });
 }
@@ -635,6 +665,7 @@ function parsePlanRunStartArgs(args: readonly string[]): ParsedPlanRunStartArgs 
   let baseBranch: string | undefined;
   let codex = false;
   let claude = false;
+  let write = false;
   let timeoutMs: number | undefined;
   let json = false;
   for (let index = 1; index < args.length; index += 1) {
@@ -655,6 +686,11 @@ function parsePlanRunStartArgs(args: readonly string[]): ParsedPlanRunStartArgs 
 
     if (arg === "--claude") {
       claude = true;
+      continue;
+    }
+
+    if (arg === "--write") {
+      write = true;
       continue;
     }
 
@@ -679,6 +715,7 @@ function parsePlanRunStartArgs(args: readonly string[]): ParsedPlanRunStartArgs 
     projectId,
     codex,
     claude,
+    write,
     json,
     ...(baseBranch === undefined ? {} : { baseBranch }),
     ...(timeoutMs === undefined ? {} : { timeoutMs })
@@ -714,6 +751,54 @@ function parsePlanRunDecisionArgs(args: readonly string[]): ParsedPlanRunDecisio
 
   return {
     teamRunId,
+    json,
+    ...(note === undefined ? {} : { note })
+  };
+}
+
+function parsePlanRunReviewArgs(args: readonly string[]): ParsedPlanRunReviewArgs | undefined {
+  const teamRunId = args[0];
+  if (teamRunId === undefined || teamRunId.trim().length === 0) {
+    return undefined;
+  }
+
+  let decision: ParsedPlanRunReviewArgs["decision"] | undefined;
+  let note: string | undefined;
+  let json = false;
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--accept" || arg === "--reject") {
+      if (decision !== undefined) {
+        return undefined;
+      }
+      decision = arg === "--accept" ? "accepted" : "rejected";
+      continue;
+    }
+
+    if (arg === "--note") {
+      note = args[index + 1];
+      if (note === undefined || note.trim().length === 0) {
+        return undefined;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
+
+    return undefined;
+  }
+
+  if (decision === undefined) {
+    return undefined;
+  }
+
+  return {
+    teamRunId,
+    decision,
     json,
     ...(note === undefined ? {} : { note })
   };
@@ -766,7 +851,8 @@ function createTeamRunExecutor(
   const { registry } = createAgentWorkerRegistry({
     codex: dispatchConfig?.workers.codex === true,
     claude: dispatchConfig?.workers.claude === true,
-    runner: context.runner
+    runner: context.runner,
+    readOnly: dispatchConfig?.write !== true
   });
 
   return {
@@ -778,6 +864,7 @@ function createTeamRunExecutor(
       worktreeManager: new GitWorktreeManager({ runner: context.runner, repoRoot: context.cwd }),
       agentWorkerRegistry: registry,
       clock: context.clock,
+      write: dispatchConfig?.write === true,
       ...(dispatchConfig?.timeoutMs === undefined ? {} : { timeoutMs: dispatchConfig.timeoutMs })
     })
   };
@@ -797,6 +884,9 @@ function printTeamRunResult(teamRun: TeamRun, json: boolean, context: CommandCon
   if (teamRun.worktreePath !== undefined) {
     context.stdout(`Worktree: ${teamRun.worktreePath}`);
   }
+  if (teamRun.diffSummary !== undefined) {
+    context.stdout(`Diff: ${teamRun.diffSummary}`);
+  }
   for (const role of teamRun.roles) {
     context.stdout(`- ${role.roleId}: ${role.name} (${role.status})${role.reason === undefined ? "" : ` - ${role.reason}`}`);
   }
@@ -805,6 +895,10 @@ function printTeamRunResult(teamRun: TeamRun, json: boolean, context: CommandCon
   }
   if (teamRun.status === "awaiting-approval") {
     context.stdout(`승인 대기: baton project plan run approve ${teamRun.id}`);
+  }
+  if (teamRun.status === "awaiting-review") {
+    context.stdout(`검토 대기: baton project plan run review ${teamRun.id} --accept|--reject`);
+    context.stdout(`Diff artifact: ${path.join(new ArtifactStore({ workspaceRoot: context.cwd }).getRunDir(teamRun.id), "diff.patch")}`);
   }
 }
 
@@ -847,9 +941,10 @@ function projectUsage(): string {
     "  baton project plan generate <projectId> --overview <text>",
     "  baton project plan show <projectId> [--json]",
     "  baton project plan set <projectId> [--file <path>]",
-    "  baton project plan run start <projectId> [--base <branch>] [--codex] [--claude] [--timeout-ms <ms>] [--json]",
+    "  baton project plan run start <projectId> [--base <branch>] [--codex] [--claude] [--write] [--timeout-ms <ms>] [--json]",
     "  baton project plan run approve <teamRunId> [--note <text>] [--json]",
     "  baton project plan run reject <teamRunId> [--note <text>] [--json]",
+    "  baton project plan run review <teamRunId> (--accept | --reject) [--note <text>] [--json]",
     "  baton project plan run show <teamRunId> [--json]",
     "  baton project plan run list <projectId> [--json]"
   ].join("\n");

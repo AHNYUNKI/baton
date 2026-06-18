@@ -4,7 +4,15 @@ import { ApprovalSchema } from "./approval.schema.js";
 
 export const TeamRunRoleStatusSchema = z.enum(["planned", "running", "completed", "failed", "skipped"]);
 
-export const TeamRunStatusSchema = z.enum(["planned", "awaiting-approval", "running", "completed", "failed", "cancelled"]);
+export const TeamRunStatusSchema = z.enum([
+  "planned",
+  "awaiting-approval",
+  "awaiting-review",
+  "running",
+  "completed",
+  "failed",
+  "cancelled"
+]);
 
 export const TeamRunRoleUsageSchema = z.object({
   inputTokens: z.number().int().nonnegative(),
@@ -35,6 +43,7 @@ export const TeamRunSchema = z.object({
   roles: z.array(TeamRunRoleSchema),
   worktreePath: z.string().min(1).optional(),
   baseBranch: z.string().min(1).optional(),
+  diffSummary: z.string().optional(),
   approvals: z.array(ApprovalSchema).optional()
 });
 

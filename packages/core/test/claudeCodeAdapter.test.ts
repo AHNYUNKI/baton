@@ -78,6 +78,25 @@ describe("ClaudeCodeAdapter", () => {
     });
   });
 
+  it("adds acceptEdits permission mode for write runs without dangerous bypass", async () => {
+    const mock = createMockProcessRunner();
+    const adapter = new ClaudeCodeAdapter({
+      runner: mock.runner,
+      readOnly: false,
+      write: true,
+      outputFormat: "json",
+      args: ["--print", "--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"]
+    });
+
+    await adapter.run({ cwd: "/repo/worktree", prompt: "prompt" });
+
+    expect(mock.calls[0]).toEqual({
+      command: "claude",
+      args: ["--print", "--permission-mode", "acceptEdits", "--output-format", "json"],
+      options: { cwd: "/repo/worktree", input: "prompt" }
+    });
+  });
+
   it("parses json output into result text and measured usage", async () => {
     const mock = createMockProcessRunner([
       {

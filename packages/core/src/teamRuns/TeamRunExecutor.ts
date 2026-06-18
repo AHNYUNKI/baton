@@ -9,6 +9,7 @@ import { EventLogger } from "../events/EventLogger.js";
 import type { WorktreeManager } from "../git/GitWorktreeManager.js";
 import type { Clock } from "../ports/Clock.js";
 import { systemClock } from "../ports/Clock.js";
+import type { ProcessRunResult } from "../ports/ProcessRunner.js";
 import type { WorkerRunResult } from "../workers/WorkerAdapter.js";
 import { buildRolePrompt, type UpstreamContextEntry } from "./buildRolePrompt.js";
 import { collectUpstreamRoleIds } from "./collectUpstream.js";
@@ -18,7 +19,7 @@ import { readOrEstimateUsage } from "./usage.js";
 import type { AgentWorkerRegistry } from "./AgentWorkerRegistry.js";
 import type { TeamRunStore } from "./TeamRunStore.js";
 
-export type TeamRunExecutionOutcome = "completed" | "awaiting-approval" | "failed" | "cancelled";
+export type TeamRunExecutionOutcome = "completed" | "awaiting-approval" | "awaiting-review" | "failed" | "cancelled";
 
 export type TeamRunExecutionResult = {
   teamRun: TeamRun;
@@ -41,6 +42,7 @@ export type TeamRunExecutorOptions = {
   worktreeRoot?: string;
   timeoutMs?: number;
   relayMaxChars?: number;
+  write?: boolean;
   idGenerator?: () => string;
 };
 
@@ -54,12 +56,18 @@ export type DecideTeamRunOptions = {
   note?: string;
 };
 
+export type ReviewTeamRunOptions = {
+  decision: "accepted" | "rejected";
+  note?: string;
+};
+
 type WorkerInvocation = {
   prompt: string;
   result: WorkerRunResult;
 };
 
 const preDispatchStepId = "pre-dispatch";
+const postRunReviewStepId = "post-run-review";
 const terminalRoleStatuses = new Set<TeamRunRole["status"]>(["completed", "failed", "skipped"]);
 
 export class TeamRunExecutor {
@@ -72,6 +80,7 @@ export class TeamRunExecutor {
   private readonly worktreeRoot: string | undefined;
   private readonly timeoutMs: number | undefined;
   private readonly relayMaxChars: number;
+  private readonly write: boolean;
   private readonly idGenerator: () => string;
 
   public constructor(options: TeamRunExecutorOptions) {
@@ -84,6 +93,7 @@ export class TeamRunExecutor {
     this.worktreeRoot = options.worktreeRoot;
     this.timeoutMs = options.timeoutMs;
     this.relayMaxChars = options.relayMaxChars ?? 1500;
+    this.write = options.write === true;
     this.idGenerator = options.idGenerator ?? randomUUID;
   }
 
@@ -132,7 +142,7 @@ export class TeamRunExecutor {
     const teamRun = await this.teamRunStore.save({
       ...baseTeamRun,
       status: "awaiting-approval",
-      approvals: [this.buildApproval(teamRunId, "pending")]
+      approvals: [this.buildApproval(teamRunId, preDispatchStepId, "pending")]
     });
     await this.teamRunEvent(teamRun, "teamRun.started", { projectId, baseBranch, worktreePath });
 
@@ -148,7 +158,7 @@ export class TeamRunExecutor {
 
     let teamRun = upsertApproval(
       loaded,
-      this.buildApproval(teamRunId, options.decision, options.note, pendingApproval.createdAt)
+      this.buildApproval(teamRunId, preDispatchStepId, options.decision, options.note, pendingApproval.createdAt)
     );
 
     if (options.decision === "rejected") {
@@ -161,6 +171,30 @@ export class TeamRunExecutor {
     return this.executeFrom({ ...teamRun, status: "running" });
   }
 
+  public async review(teamRunId: string, options: ReviewTeamRunOptions): Promise<TeamRunExecutionResult> {
+    const loaded = await this.teamRunStore.load(teamRunId);
+    const pendingApproval = postRunReviewApproval(loaded);
+    if (loaded.status !== "awaiting-review" || pendingApproval?.status !== "pending") {
+      throw new Error(`TeamRun is not awaiting post-run review: ${teamRunId}`);
+    }
+
+    const approvalStatus: ApprovalStatus = options.decision === "accepted" ? "approved" : "rejected";
+    const nextStatus = options.decision === "accepted" ? "completed" : "cancelled";
+    const teamRun = await this.teamRunStore.save({
+      ...upsertApproval(
+        loaded,
+        this.buildApproval(teamRunId, postRunReviewStepId, approvalStatus, options.note, pendingApproval.createdAt)
+      ),
+      status: nextStatus
+    });
+
+    await this.teamRunEvent(teamRun, options.decision === "accepted" ? "teamRun.review.accepted" : "teamRun.review.rejected", {
+      note: options.note ?? ""
+    });
+
+    return { teamRun, outcome: nextStatus, artifactPaths: [] };
+  }
+
   public async resume(teamRunId: string): Promise<TeamRunExecutionResult> {
     const loaded = await this.teamRunStore.load(teamRunId);
     if (loaded.status === "cancelled") {
@@ -171,6 +205,9 @@ export class TeamRunExecutor {
     }
     if (loaded.status === "completed") {
       return { teamRun: loaded, outcome: "completed", artifactPaths: [] };
+    }
+    if (loaded.status === "awaiting-review") {
+      return { teamRun: loaded, outcome: "awaiting-review", artifactPaths: [] };
     }
 
     const approval = preDispatchApproval(loaded);
@@ -267,10 +304,35 @@ export class TeamRunExecutor {
 
       if (!result.success) {
         teamRun = skipRolesAfter(teamRun, roleId, `Previous role failed: ${roleId}`, this.now());
-        teamRun = await this.teamRunStore.save({ ...teamRun, status: "failed" });
+        const diffArtifact = this.write ? await this.captureDiffArtifact(teamRun) : undefined;
+        teamRun = await this.teamRunStore.save({
+          ...teamRun,
+          status: "failed",
+          ...(diffArtifact === undefined ? {} : { diffSummary: diffArtifact.summary })
+        });
         await this.teamRunEvent(teamRun, "teamRun.failed", { failedRoleId: roleId });
-        return { teamRun, outcome: "failed", artifactPaths: artifacts };
+        return {
+          teamRun,
+          outcome: "failed",
+          artifactPaths: diffArtifact === undefined ? artifacts : [...artifacts, diffArtifact.artifactPath]
+        };
       }
+    }
+
+    if (this.write) {
+      const diffArtifact = await this.captureDiffArtifact(teamRun);
+      const awaitingReview = await this.teamRunStore.save({
+        ...upsertApproval(
+          {
+            ...teamRun,
+            diffSummary: diffArtifact.summary
+          },
+          this.buildApproval(teamRun.id, postRunReviewStepId, "pending")
+        ),
+        status: "awaiting-review"
+      });
+      await this.teamRunEvent(awaitingReview, "teamRun.awaitingReview", { diffSummary: diffArtifact.summary });
+      return { teamRun: awaitingReview, outcome: "awaiting-review", artifactPaths: [...artifacts, diffArtifact.artifactPath] };
     }
 
     const completed = await this.teamRunStore.save({ ...teamRun, status: "completed" });
@@ -339,13 +401,14 @@ export class TeamRunExecutor {
 
   private buildApproval(
     teamRunId: string,
+    stepId: string,
     status: ApprovalStatus,
     note?: string,
     createdAt?: string
   ): Approval {
     const baseApproval = {
       runId: teamRunId,
-      stepId: preDispatchStepId,
+      stepId,
       status,
       createdAt: createdAt ?? this.now()
     };
@@ -357,6 +420,34 @@ export class TeamRunExecutor {
           decidedAt: this.now(),
           ...(note === undefined ? {} : { note })
         };
+  }
+
+  private async captureDiffArtifact(teamRun: TeamRun): Promise<{ artifactPath: string; summary: string }> {
+    let result: ProcessRunResult;
+    try {
+      result = await this.worktreeManager.diff(requiredWorktreePath(teamRun));
+    } catch (error) {
+      const summary = `Diff capture failed: ${errorMessage(error)}`;
+      const artifactPath = await this.artifactStore.writeArtifact(teamRun.id, "diff.patch", `${summary}\n`);
+      return { artifactPath, summary };
+    }
+
+    const summary = summarizeDiffResult(result);
+    const content =
+      result.exitCode === 0
+        ? result.stdout
+        : [
+            "Diff capture failed.",
+            `Exit code: ${result.exitCode ?? "null"}`,
+            "",
+            "stdout:",
+            result.stdout,
+            "",
+            "stderr:",
+            result.stderr
+          ].join("\n");
+    const artifactPath = await this.artifactStore.writeArtifact(teamRun.id, "diff.patch", content);
+    return { artifactPath, summary };
   }
 
   private async saveFailedStart(teamRun: TeamRun, reason: string): Promise<TeamRun> {
@@ -419,6 +510,10 @@ function buildUpstreamContext(roleId: string, teamPlan: TeamPlan, teamRun: TeamR
 
 function preDispatchApproval(teamRun: TeamRun): Approval | undefined {
   return teamRun.approvals?.find((approval) => approval.stepId === preDispatchStepId);
+}
+
+function postRunReviewApproval(teamRun: TeamRun): Approval | undefined {
+  return teamRun.approvals?.find((approval) => approval.stepId === postRunReviewStepId);
 }
 
 function upsertApproval(teamRun: TeamRun, approval: Approval): TeamRun {
@@ -505,6 +600,37 @@ function roleReason(result: WorkerRunResult, registeredAgent: boolean, assignedA
 
 function roleArtifactId(roleId: string): string {
   return encodeURIComponent(roleId);
+}
+
+function summarizeDiffResult(result: ProcessRunResult): string {
+  if (result.exitCode !== 0) {
+    const message = result.stderr || result.stdout || "unknown error";
+    return `Diff capture failed: ${message}`;
+  }
+
+  const diffStat = metadataString(result.metadata, "diffStat");
+  const statLines = diffStat
+    ?.split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const summaryLine = statLines?.[statLines.length - 1];
+  if (summaryLine !== undefined) {
+    return summaryLine;
+  }
+
+  if (result.stdout.trim().length === 0) {
+    return "No changes captured.";
+  }
+
+  const fileCount = result.stdout.split("\n").filter((line) => line.startsWith("diff --git ")).length;
+  const insertions = result.stdout.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++")).length;
+  const deletions = result.stdout.split("\n").filter((line) => line.startsWith("-") && !line.startsWith("---")).length;
+  return `${fileCount} files changed, ${insertions} insertions(+), ${deletions} deletions(-)`;
+}
+
+function metadataString(metadata: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = metadata?.[key];
+  return typeof value === "string" ? value : undefined;
 }
 
 function errorMessage(error: unknown): string {

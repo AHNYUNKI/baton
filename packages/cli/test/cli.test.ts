@@ -569,6 +569,7 @@ describe("@baton/cli", () => {
     expect(JSON.parse(await readFile(path.join(localDir, ".baton", "runs", started.id, "team-run-dispatch.json"), "utf8"))).toEqual({
       version: 1,
       workers: { codex: true, claude: true },
+      write: false,
       timeoutMs: 1234
     });
 
@@ -605,6 +606,94 @@ describe("@baton/cli", () => {
     const claudeCall = approveCalls.find((call) => call.command === "claude" && call.args.includes("--output-format"));
     expect(claudeCall?.args).toEqual(["--print", "--permission-mode", "plan", "--output-format", "json"]);
     expect(claudeCall?.options).toMatchObject({ cwd: started.worktreePath, timeoutMs: 1234 });
+  });
+
+  it("runs opted-in TeamRun workers in write mode and gates completion on review", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "baton-cli-home-"));
+    const localDir = await mkdtemp(path.join(tmpdir(), "baton-cli-team-run-write-"));
+    const env = { ...process.env, BATON_HOME: homeDir };
+    const output: string[] = [];
+    const mock = createMockProcessRunner([
+      { stdout: "codex 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "", stderr: "", exitCode: 0, durationMs: 2 },
+      { stdout: "codex 1.0.0\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "lead result", stderr: "", exitCode: 0, durationMs: 20 },
+      { stdout: "implementer result", stderr: "", exitCode: 0, durationMs: 21 },
+      { stdout: "", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: " src/file.ts | 2 ++\n 1 file changed, 2 insertions(+)\n", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: "diff --git a/src/file.ts b/src/file.ts\n+hello\n", stderr: "", exitCode: 0, durationMs: 1 }
+    ]);
+    const projectId = await createProjectWithPlan({ env, cwd: localDir });
+
+    expect(
+      await runCli(["project", "plan", "run", "start", projectId, "--codex", "--write", "--json"], {
+        cwd: localDir,
+        env,
+        runner: mock.runner,
+        clock: fixedClock("2026-06-17T00:00:00.000Z"),
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+
+    const started = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
+    expect(JSON.parse(await readFile(path.join(localDir, ".baton", "runs", started.id, "team-run-dispatch.json"), "utf8"))).toEqual({
+      version: 1,
+      workers: { codex: true, claude: false },
+      write: true,
+      timeoutMs: 600000
+    });
+
+    output.length = 0;
+    expect(
+      await runCli(["project", "plan", "run", "approve", started.id, "--json"], {
+        cwd: localDir,
+        env,
+        runner: mock.runner,
+        clock: fixedClock("2026-06-17T00:00:00.000Z"),
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+
+    const awaitingReview = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
+    expect(awaitingReview.status).toBe("awaiting-review");
+    expect(awaitingReview.diffSummary).toBe("1 file changed, 2 insertions(+)");
+    expect(awaitingReview.approvals?.find((approval) => approval.stepId === "post-run-review")).toMatchObject({ status: "pending" });
+    expect(await readFile(path.join(localDir, ".baton", "runs", started.id, "diff.patch"), "utf8")).toBe(
+      "diff --git a/src/file.ts b/src/file.ts\n+hello\n"
+    );
+
+    const codexExecCalls = mock.calls.filter((call) => call.command === "codex" && call.args[0] === "exec");
+    expect(codexExecCalls.map((call) => call.args)).toEqual([
+      ["exec", "--sandbox", "workspace-write"],
+      ["exec", "--sandbox", "workspace-write"]
+    ]);
+    expect(codexExecCalls.every((call) => call.options?.cwd === started.worktreePath)).toBe(true);
+    expect(mock.calls.slice(-3).map((call) => call.args)).toEqual([
+      ["-C", started.worktreePath ?? "", "add", "-A"],
+      ["-C", started.worktreePath ?? "", "--no-pager", "diff", "--cached", "--stat"],
+      ["-C", started.worktreePath ?? "", "--no-pager", "diff", "--cached"]
+    ]);
+
+    output.length = 0;
+    expect(await runCli(["project", "plan", "run", "show", started.id], { cwd: localDir, env, stdout: (line) => output.push(line) })).toBe(0);
+    expect(output.join("\n")).toContain("Diff: 1 file changed, 2 insertions(+)");
+    expect(output.join("\n")).toContain(`검토 대기: baton project plan run review ${started.id} --accept|--reject`);
+
+    output.length = 0;
+    expect(
+      await runCli(["project", "plan", "run", "review", started.id, "--accept", "--note", "ok", "--json"], {
+        cwd: localDir,
+        env,
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+
+    const accepted = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
+    expect(accepted.status).toBe("completed");
+    expect(accepted.approvals?.find((approval) => approval.stepId === "post-run-review")).toMatchObject({
+      status: "approved",
+      note: "ok"
+    });
   });
 
   it("fails TeamRun start before creating a worktree when opted-in preflight fails", async () => {

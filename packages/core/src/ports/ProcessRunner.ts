@@ -12,6 +12,7 @@ export type ProcessRunResult = {
   stderr: string;
   exitCode: number | null;
   durationMs: number;
+  metadata?: Record<string, unknown>;
 };
 
 export type ProcessRunner = {

@@ -80,9 +80,34 @@ describe("AgentWorkerRegistry", () => {
     });
   });
 
-  it("does not expose writable real dispatch adapters", () => {
-    expect(() => createAgentWorkerRegistry({ codex: true, readOnly: false })).toThrow("read-only");
-    expect(() => createAgentWorkerRegistry({ claude: true, readOnly: false })).toThrow("read-only");
+  it("creates codex and claude as writable adapters only when readOnly is false", async () => {
+    const mock = createMockProcessRunner([
+      { stdout: "codex ok", stderr: "", exitCode: 0, durationMs: 1 },
+      { stdout: JSON.stringify({ result: "claude ok" }), stderr: "", exitCode: 0, durationMs: 1 }
+    ]);
+    const { registry, codexWorker, claudeWorker } = createAgentWorkerRegistry({
+      codex: true,
+      claude: true,
+      readOnly: false,
+      runner: mock.runner
+    });
+
+    expect(codexWorker).toBe("codex");
+    expect(claudeWorker).toBe("claude");
+    await registry.resolve("codex").run({ cwd: "/tmp/worktree", prompt: "implement" });
+    await registry.resolve("claude").run({ cwd: "/tmp/worktree", prompt: "design" });
+
+    expect(mock.calls[0]).toEqual({
+      command: "codex",
+      args: ["exec", "--sandbox", "workspace-write"],
+      options: { cwd: "/tmp/worktree", input: "implement" }
+    });
+    expect(mock.calls[1]).toEqual({
+      command: "claude",
+      args: ["--print", "--permission-mode", "acceptEdits", "--output-format", "json"],
+      options: { cwd: "/tmp/worktree", input: "design" }
+    });
+    expect(mock.calls[1]?.args).not.toContain("--dangerously-skip-permissions");
   });
 
   it("accepts an explicit fallback adapter", () => {

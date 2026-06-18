@@ -13,6 +13,7 @@ export type ClaudeCodeAdapterOptions = {
   command?: string;
   args?: readonly string[];
   readOnly?: boolean;
+  write?: boolean;
   outputFormat?: "text" | "json";
 };
 
@@ -128,6 +129,11 @@ function buildClaudeArgs(options: ClaudeCodeAdapterOptions): readonly string[] {
   if (options.readOnly === true) {
     args = stripDangerousPermissionArgs(args);
     args.push("--permission-mode", "plan");
+  }
+
+  if (options.write === true) {
+    args = stripDangerousPermissionArgs(args);
+    args.push("--permission-mode", "acceptEdits");
   }
 
   if (options.outputFormat !== undefined) {
