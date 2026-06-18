@@ -466,6 +466,7 @@ describe("@baton/cli", () => {
     expect(approved.status).toBe("completed");
     expect(approved.roles.map((role) => role.status)).toEqual(["completed", "completed"]);
     expect(approved.roles.every((role) => role.reason === "Completed by stub worker.")).toBe(true);
+    expect(approved.roles.every((role) => role.explanation?.includes("## 학습 설명"))).toBe(true);
     expect(approved.roles.every((role) => role.usage !== undefined && role.usage.estimated)).toBe(true);
     expect(mock.calls.some((call) => call.command === "codex")).toBe(false);
     expect(mock.calls.some((call) => call.command === "claude")).toBe(false);
@@ -476,10 +477,13 @@ describe("@baton/cli", () => {
     const shown = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
     expect(shown.status).toBe("completed");
     expect(shown.roles.map((role) => role.usage)).toEqual(approved.roles.map((role) => role.usage));
+    expect(shown.roles.map((role) => role.explanation)).toEqual(approved.roles.map((role) => role.explanation));
 
     output.length = 0;
     expect(await runCli(["project", "plan", "run", "show", started.id], { cwd: localDir, env, stdout: (line) => output.push(line) })).toBe(0);
     const showText = output.join("\n");
+    expect(showText).toContain("  ## 학습 설명");
+    expect(showText).toContain("  - 무엇을 했나:");
     expect(showText).toContain("토큰 사용량(추정/실측)");
     expect(showText).toContain("플랫폼\t입력\t출력\t합계\t역할수");
     expect(showText).toContain(

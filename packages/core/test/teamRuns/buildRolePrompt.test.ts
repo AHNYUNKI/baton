@@ -20,6 +20,13 @@ describe("buildRolePrompt", () => {
     expect(prompt).toContain("작은 변경으로 구현해 주세요.");
     expect(prompt).toContain("reportsTo: architect");
     expect(prompt).toContain("/repo/baton/.baton/runs/team-run-1");
+    expect(prompt).toContain("## 학습 설명 (필수)");
+    expect(prompt).toContain("`## 학습 설명`");
+    expect(prompt).toContain("무엇을 했나");
+    expect(prompt).toContain("왜 이렇게 했나(결정 근거)");
+    expect(prompt).toContain("핵심 개념");
+    expect(prompt).toContain("대안과 트레이드오프");
+    expect(prompt).toContain("초보 개발자용 한국어");
   });
 
   it("omits upstream context when no upstream entries are provided", () => {

@@ -1,0 +1,56 @@
+{
+  "version": "1",
+  "runId": "learning-explain-dispatch-L1",
+  "buildsOn": "gui-project-cwd-v0.19.6",
+  "baseBranch": "origin/main",
+  "language": "typescript",
+  "gates": ["pnpm typecheck", "pnpm test", "pnpm build"],
+  "notes": "학습 전환 L1. 역할이 '무엇을·왜' 초보자용 설명 → role.explanation 1급 저장. TS 단독, stub로 무토큰 검증. Swift/스트리밍은 L3. explanation은 선택 필드(회귀 0).",
+  "tasks": [
+    {
+      "id": "task-L01",
+      "title": "순수: extractExplanation(stdout)",
+      "description": "packages/core/src/teamRuns/explanation.ts: export function extractExplanation(stdout: string): string | undefined — '## 학습 설명' 헤딩을 찾아 그 지점부터 다음 동급('## ') 헤딩 전 또는 문자열 끝까지 트림 반환. 여러 개면 마지막. 없으면 undefined. 순수. core/src/index.ts export. 테스트: 정상 추출, 부재→undefined, 다중→마지막, 앞뒤 공백 트림, 다음 H2에서 종료.",
+      "targetFiles": ["packages/core/src/teamRuns/explanation.ts", "packages/core/src/index.ts", "packages/core/test/teamRuns/explanation.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-02"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-L02",
+      "title": "buildRolePrompt: 학습 설명 지시",
+      "description": "packages/core/src/teamRuns/buildRolePrompt.ts: 섹션 배열 끝(Artifacts 뒤)에 '## 학습 설명 (필수)' 지시 추가 — 워커에게 '출력 맨 끝에 ## 학습 설명 헤딩으로 무엇을 했나 / 왜 이렇게(결정 근거) / 핵심 개념 / 대안과 트레이드오프를 초보 개발자용 한국어로 작성'. 기존 섹션(upstream 등) 보존. 테스트: 출력에 '## 학습 설명' 및 항목 키워드(무엇을/왜/핵심 개념/대안) 포함.",
+      "targetFiles": ["packages/core/src/teamRuns/buildRolePrompt.ts", "packages/core/test/teamRuns/buildRolePrompt.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-L03",
+      "title": "스키마: TeamRunRole.explanation?",
+      "description": "packages/schemas/src/teamRun.schema.ts: TeamRunRoleSchema에 explanation: z.string().optional() 추가 + 타입. 선택 필드라 team-run/readApi 봉투 회귀 0. 테스트: explanation 부재/존재 수용, 봉투 round-trip.",
+      "targetFiles": ["packages/schemas/src/teamRun.schema.ts", "packages/schemas/test/teamRun.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-03", "AC-07"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test"]
+    },
+    {
+      "id": "task-L04",
+      "title": "executor 저장 + StubWorker 합성 설명",
+      "description": "packages/core/src/teamRuns/TeamRunExecutor.ts: 역할 완료 분기에서 const explanation = extractExplanation(result.stdout); replaceRole에 ...(explanation === undefined ? {} : { explanation }) 추가(summary/usage 저장과 동일 지점, 라인 ~286-289). packages/core/src/workers/StubWorker.ts: stdout에 합성 '## 학습 설명\\n- 무엇을 했나: …' 섹션 포함(무토큰 전 경로 검증). 테스트: stub run 완료 시 role.explanation 저장됨, 설명 없는 출력이면 미저장(graceful).",
+      "targetFiles": ["packages/core/src/teamRuns/TeamRunExecutor.ts", "packages/core/src/workers/StubWorker.ts", "packages/core/test/teamRuns/teamRunExecutor.test.ts"],
+      "dependencies": ["task-L01", "task-L03"],
+      "acceptanceCriteria": ["AC-04", "AC-05"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-L05",
+      "title": "CLI: plan run show 설명 표시",
+      "description": "packages/cli/src/commands/project.ts: printTeamRunResult에서 역할별 explanation 있으면 들여써 표시(텍스트). --json은 role.explanation 자동 포함. 도움말 영향 없음. 테스트: explanation 있는 team-run show → 설명 출력, 없으면 생략(graceful).",
+      "targetFiles": ["packages/cli/src/commands/project.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-L04"],
+      "acceptanceCriteria": ["AC-06", "AC-08"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build"]
+    }
+  ]
+}

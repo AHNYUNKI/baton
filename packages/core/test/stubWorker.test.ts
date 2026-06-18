@@ -10,6 +10,8 @@ describe("StubWorker", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("StubWorker");
     expect(result.stdout).toContain("stub: true");
+    expect(result.stdout).toContain("## 학습 설명");
+    expect(result.stdout).toContain("무엇을 했나");
     expect(result.metadata).toMatchObject({ stub: true });
   });
 });

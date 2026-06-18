@@ -92,6 +92,46 @@ describe("TeamRunExecutor", () => {
     );
   });
 
+  it("persists explanations extracted from completed role stdout", async () => {
+    const harness = await createHarness({
+      workerResults: [
+        {
+          stdout: [
+            "lead result",
+            "",
+            "## 학습 설명",
+            "- 무엇을 했나: 리드 역할을 실행했습니다.",
+            "- 왜 이렇게 했나(결정 근거): 다음 역할이 맥락을 이해하도록 정리했습니다."
+          ].join("\n")
+        },
+        { stdout: "architect result without explanation" },
+        {
+          stdout: [
+            "implementer result",
+            "",
+            "## 학습 설명",
+            "- 무엇을 했나: 첫 설명입니다.",
+            "## Other",
+            "ignored",
+            "## 학습 설명",
+            "- 무엇을 했나: 마지막 설명입니다."
+          ].join("\n")
+        }
+      ]
+    });
+    await harness.executor.start("project-1");
+
+    const result = await harness.executor.decide("team-run-1", { decision: "approved" });
+
+    expect(result.teamRun.roles.find((role) => role.roleId === "lead")?.explanation).toBe(
+      "## 학습 설명\n- 무엇을 했나: 리드 역할을 실행했습니다.\n- 왜 이렇게 했나(결정 근거): 다음 역할이 맥락을 이해하도록 정리했습니다."
+    );
+    expect(result.teamRun.roles.find((role) => role.roleId === "architect")?.explanation).toBeUndefined();
+    expect(result.teamRun.roles.find((role) => role.roleId === "implementer")?.explanation).toBe(
+      "## 학습 설명\n- 무엇을 했나: 마지막 설명입니다."
+    );
+  });
+
   it("captures a write diff and waits for post-run review instead of completing", async () => {
     const harness = await createHarness({ write: true });
     await harness.executor.start("project-1");

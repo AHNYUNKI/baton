@@ -53,12 +53,31 @@ describe("TeamRun schema", () => {
           completedAt: "2026-06-17T00:00:20.000Z",
           reason: "Completed by stub worker.",
           summary: "Design summary.",
+          explanation: "## 학습 설명\n- 무엇을 했나: 설계를 요약했습니다.",
           usage: {
             inputTokens: 12,
             outputTokens: 4,
             estimated: true
           },
           artifacts: ["/tmp/baton-worktree/logs/architect.stdout.log"]
+        }
+      ]
+    });
+
+    expect(TeamRunSchema.parse(teamRun)).toEqual(teamRun);
+  });
+
+  it("accepts team runs when optional role explanations are absent or present", () => {
+    expect(TeamRunSchema.parse(teamRunFixture()).roles.every((role) => role.explanation === undefined)).toBe(true);
+
+    const teamRun = teamRunFixture({
+      roles: [
+        {
+          roleId: "architect",
+          name: "Architect",
+          assignedAgentId: "claude",
+          status: "completed",
+          explanation: "## 학습 설명\n- 무엇을 했나: 아키텍처를 설명했습니다."
         }
       ]
     });

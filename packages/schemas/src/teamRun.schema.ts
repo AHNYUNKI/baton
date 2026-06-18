@@ -29,6 +29,7 @@ export const TeamRunRoleSchema = z.object({
   completedAt: z.string().datetime().optional(),
   reason: z.string().min(1).optional(),
   summary: z.string().optional(),
+  explanation: z.string().optional(),
   usage: TeamRunRoleUsageSchema.optional(),
   artifacts: z.array(z.string().min(1)).optional()
 });
