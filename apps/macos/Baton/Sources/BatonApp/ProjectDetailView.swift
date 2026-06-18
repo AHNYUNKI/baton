@@ -3,7 +3,7 @@ import SwiftUI
 
 struct ProjectDetailView: View {
     let project: Project
-    let client: BatonClient
+    private let client: BatonClient
     @Binding var selectedTab: AppNavigationModel.ProjectTab
     let onSaved: () -> Void
 
@@ -12,6 +12,21 @@ struct ProjectDetailView: View {
     @State private var teamRunWatchMessage: String?
     @State private var isTeamRunMonitorLoading = false
     @State private var teamRunWatchTask: Task<Void, Never>?
+
+    init(
+        project: Project,
+        batonExecutablePreference: String,
+        selectedTab: Binding<AppNavigationModel.ProjectTab>,
+        onSaved: @escaping () -> Void
+    ) {
+        self.project = project
+        self.client = BatonClient(
+            executable: BatonLocation.resolve(preference: batonExecutablePreference),
+            workingDirectory: localWorkingDirectory(for: project)
+        )
+        _selectedTab = selectedTab
+        self.onSaved = onSaved
+    }
 
     var body: some View {
         VStack(spacing: 0) {
