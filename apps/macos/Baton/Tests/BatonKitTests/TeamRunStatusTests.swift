@@ -19,6 +19,7 @@ final class TeamRunStatusTests: XCTestCase {
         XCTAssertEqual(teamRunStatusLabel("running"), "진행 중")
         XCTAssertEqual(teamRunStatusLabel("awaiting-approval"), "승인 대기")
         XCTAssertEqual(teamRunStatusLabel("awaiting-review"), "검토 대기")
+        XCTAssertEqual(teamRunStatusLabel("awaiting-checkpoint"), "검토 대기")
         XCTAssertEqual(teamRunStatusLabel("completed"), "완료")
         XCTAssertEqual(teamRunStatusLabel("failed"), "실패")
         XCTAssertEqual(teamRunStatusLabel("cancelled"), "취소됨")

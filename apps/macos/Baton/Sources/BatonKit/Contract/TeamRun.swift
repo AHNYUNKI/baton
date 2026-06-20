@@ -20,6 +20,7 @@ public struct TeamRunRole: Codable, Equatable, Identifiable, Sendable {
     public let startedAt: String?
     public let completedAt: String?
     public let reason: String?
+    public let explanation: String?
     public let summary: String?
     public let usage: TeamRunRoleUsage?
     public let artifacts: [String]?
@@ -34,6 +35,7 @@ public struct TeamRunRole: Codable, Equatable, Identifiable, Sendable {
         startedAt: String? = nil,
         completedAt: String? = nil,
         reason: String? = nil,
+        explanation: String? = nil,
         summary: String? = nil,
         usage: TeamRunRoleUsage? = nil,
         artifacts: [String]? = nil
@@ -45,6 +47,7 @@ public struct TeamRunRole: Codable, Equatable, Identifiable, Sendable {
         self.startedAt = startedAt
         self.completedAt = completedAt
         self.reason = reason
+        self.explanation = explanation
         self.summary = summary
         self.usage = usage
         self.artifacts = artifacts

@@ -12,9 +12,26 @@ final class TeamRunContractTests: XCTestCase {
         XCTAssertEqual(envelope.data.diffSummary, "1 file changed, 2 insertions(+)")
         XCTAssertEqual(envelope.data.roles.map(\.roleId), ["lead", "implementer"])
         XCTAssertEqual(envelope.data.roles.first?.usage, TeamRunRoleUsage(inputTokens: 12, outputTokens: 7, estimated: false))
+        XCTAssertNil(envelope.data.roles.first?.explanation)
         XCTAssertNil(envelope.data.roles[1].startedAt)
         XCTAssertNil(envelope.data.roles[1].usage)
         XCTAssertEqual(envelope.data.approvals?.first?.stepId, "post-run-review")
+    }
+
+    func testDecodesCheckpointTeamRunEnvelopeWithExplanationAndExtraFields() throws {
+        let envelope = try decodeFixture("team-run-checkpoint.json", as: JsonEnvelope<TeamRun>.self)
+
+        XCTAssertEqual(envelope.kind, "team-run")
+        XCTAssertEqual(envelope.data.id, "team-run-checkpoint")
+        XCTAssertEqual(envelope.data.status, "awaiting-checkpoint")
+        XCTAssertEqual(envelope.data.roles.first?.roleId, "analyst")
+        XCTAssertEqual(
+            envelope.data.roles.first?.explanation,
+            "이 단계는 요구사항의 검토 기준을 먼저 정리해 이후 구현 범위를 작게 유지합니다."
+        )
+        XCTAssertNil(envelope.data.roles[1].explanation)
+        XCTAssertEqual(envelope.data.approvals?.first?.stepId, "checkpoint:analyst")
+        XCTAssertEqual(envelope.data.approvals?.first?.status, .pending)
     }
 
     func testDecodesTeamRunListEnvelopeWithSummaryCountsAsOptional() throws {

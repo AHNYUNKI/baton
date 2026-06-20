@@ -42,6 +42,40 @@ public struct TeamRunMonitorModel: Equatable, Sendable {
         current?.status == "awaiting-review"
     }
 
+    public var canContinueCheckpoint: Bool {
+        current?.status == "awaiting-checkpoint"
+    }
+
+    public var checkpointRoleId: String? {
+        guard let current, current.status == "awaiting-checkpoint" else {
+            return nil
+        }
+
+        if let checkpointApproval = current.approvals?.first(where: { approval in
+            approval.status == .pending && approval.stepId.hasPrefix("checkpoint:")
+        }) {
+            let roleId = String(checkpointApproval.stepId.dropFirst("checkpoint:".count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !roleId.isEmpty {
+                return roleId
+            }
+        }
+
+        let rankByRole = Dictionary(uniqueKeysWithValues: current.order.enumerated().map { ($0.element, $0.offset) })
+        return current.roles.enumerated()
+            .filter { $0.element.status == "completed" }
+            .max { left, right in
+                let leftRank = rankByRole[left.element.roleId] ?? left.offset
+                let rightRank = rankByRole[right.element.roleId] ?? right.offset
+                if leftRank != rightRank {
+                    return leftRank < rightRank
+                }
+                return left.offset < right.offset
+            }?
+            .element
+            .roleId
+    }
+
     public var statusByRole: [String: String] {
         guard let current else {
             return [:]

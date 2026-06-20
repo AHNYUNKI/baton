@@ -206,6 +206,19 @@ public struct BatonClient: Sendable {
     }
 
     @discardableResult
+    public func continueCheckpoint(teamRunId: String, reject: Bool = false, note: String? = nil) async throws -> TeamRun {
+        var arguments = ["project", "plan", "run", "continue", teamRunId]
+        if reject {
+            arguments.append("--reject")
+        }
+        if let note, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            arguments.append(contentsOf: ["--note", note])
+        }
+        arguments.append("--json")
+        return try await decodeJSON(arguments: arguments, expectedKind: "team-run")
+    }
+
+    @discardableResult
     public func setTeamPlan(projectId: String, plan: TeamPlan) async throws -> TeamPlan {
         guard !projectId.isEmpty, !plan.roles.isEmpty else {
             throw BatonClientError.invalidTeamPlan

@@ -20,12 +20,47 @@ final class TeamRunMonitorModelTests: XCTestCase {
         model.setCurrent(teamRun(id: "team-run-1", status: "awaiting-approval", roleStatus: "planned"))
         XCTAssertTrue(model.canApprove)
         XCTAssertFalse(model.canReview)
+        XCTAssertFalse(model.canContinueCheckpoint)
         XCTAssertEqual(model.statusByRole, ["lead": "planned"])
 
         model.setCurrent(teamRun(id: "team-run-1", status: "awaiting-review", roleStatus: "completed"))
         XCTAssertFalse(model.canApprove)
         XCTAssertTrue(model.canReview)
+        XCTAssertFalse(model.canContinueCheckpoint)
         XCTAssertEqual(model.statusByRole, ["lead": "completed"])
+    }
+
+    func testCanContinueCheckpointAndCheckpointRoleFollowCurrentRun() {
+        var model = TeamRunMonitorModel()
+
+        model.setCurrent(checkpointTeamRun(status: "running"))
+        XCTAssertFalse(model.canContinueCheckpoint)
+        XCTAssertNil(model.checkpointRoleId)
+
+        model.setCurrent(checkpointTeamRun(status: "awaiting-checkpoint"))
+        XCTAssertTrue(model.canContinueCheckpoint)
+        XCTAssertEqual(model.checkpointRoleId, "analyst")
+    }
+
+    func testCheckpointRoleFallsBackToLatestCompletedRoleWhenApprovalIsMissing() {
+        var model = TeamRunMonitorModel()
+
+        model.setCurrent(
+            TeamRun(
+                id: "team-run-1",
+                projectId: "project-1",
+                status: "awaiting-checkpoint",
+                createdAt: "2026-06-17T00:02:00.000Z",
+                order: ["analyst", "implementer", "tester"],
+                roles: [
+                    TeamRunRole(roleId: "analyst", name: "Analyst", assignedAgentId: "claude", status: "completed"),
+                    TeamRunRole(roleId: "implementer", name: "Implementer", assignedAgentId: "codex", status: "completed"),
+                    TeamRunRole(roleId: "tester", name: "Tester", assignedAgentId: "claude", status: "planned")
+                ]
+            )
+        )
+
+        XCTAssertEqual(model.checkpointRoleId, "implementer")
     }
 
     func testSelectClearsStaleCurrentAndSetSummariesKeepsValidSelection() {
@@ -73,6 +108,28 @@ final class TeamRunMonitorModelTests: XCTestCase {
             order: ["lead"],
             roles: [
                 TeamRunRole(roleId: "lead", name: "Lead", assignedAgentId: "claude", status: roleStatus)
+            ]
+        )
+    }
+
+    private func checkpointTeamRun(status: String) -> TeamRun {
+        TeamRun(
+            id: "team-run-checkpoint",
+            projectId: "project-1",
+            status: status,
+            createdAt: "2026-06-17T00:02:00.000Z",
+            order: ["analyst", "implementer"],
+            roles: [
+                TeamRunRole(roleId: "analyst", name: "Analyst", assignedAgentId: "claude", status: "completed"),
+                TeamRunRole(roleId: "implementer", name: "Implementer", assignedAgentId: "codex", status: "planned")
+            ],
+            approvals: [
+                Approval(
+                    runId: "team-run-checkpoint",
+                    stepId: "checkpoint:analyst",
+                    status: .pending,
+                    createdAt: "2026-06-17T00:03:00.000Z"
+                )
             ]
         )
     }
