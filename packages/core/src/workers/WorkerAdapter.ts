@@ -3,6 +3,7 @@ export type WorkerRunInput = {
   prompt: string;
   timeoutMs?: number;
   metadata?: Record<string, unknown>;
+  onOutput?: (chunk: string) => void;
 };
 
 export type WorkerRunResult = {

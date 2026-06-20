@@ -2,6 +2,12 @@ import type { WorkerAdapter, WorkerRunInput, WorkerRunResult } from "./WorkerAda
 
 export class StubWorker implements WorkerAdapter {
   public async run(input: WorkerRunInput): Promise<WorkerRunResult> {
+    if (input.onOutput !== undefined) {
+      emitOutput(input.onOutput, "StubWorker: preparing deterministic role output\n");
+      emitOutput(input.onOutput, "StubWorker: writing synthetic progress chunk\n");
+      emitOutput(input.onOutput, "StubWorker: completed without external AI\n");
+    }
+
     return {
       success: true,
       exitCode: 0,
@@ -25,5 +31,13 @@ export class StubWorker implements WorkerAdapter {
         message: "StubWorker did not execute provider-specific code."
       }
     };
+  }
+}
+
+function emitOutput(onOutput: (chunk: string) => void, chunk: string): void {
+  try {
+    onOutput(chunk);
+  } catch {
+    // Streaming observers must never change worker execution semantics.
   }
 }

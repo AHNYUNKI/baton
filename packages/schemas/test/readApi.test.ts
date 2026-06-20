@@ -9,6 +9,7 @@ import {
   makeEnvelope,
   TeamRunEnvelopeSchema,
   TeamRunListEnvelopeSchema,
+  TeamRunStreamEventSchema,
   type RunSummaryJson,
   type TeamRun
 } from "../src/index.js";
@@ -117,6 +118,36 @@ describe("read API schemas", () => {
       data: created
     });
     expect(WatchEventSchema.safeParse({ type: "run.unknown", runId: "run-1" }).success).toBe(false);
+  });
+
+  it("validates team-run stream events in event envelopes", () => {
+    const outputEvent = {
+      type: "teamRun.role.output",
+      runId: "team-run-1",
+      roleId: "implementer",
+      chunk: "live output\n"
+    };
+    const completedEvent = {
+      type: "teamRun.role.completed",
+      runId: "team-run-1",
+      roleId: "implementer",
+      exitCode: 0,
+      usage: { inputTokens: 1, outputTokens: 2, estimated: true }
+    };
+    const runEvent = {
+      type: "teamRun.completed",
+      runId: "team-run-1"
+    };
+
+    expect(TeamRunStreamEventSchema.parse(outputEvent)).toEqual(outputEvent);
+    expect(WatchEventEnvelopeSchema.parse(makeEnvelope("event", outputEvent))).toEqual({
+      schemaVersion: 1,
+      kind: "event",
+      data: outputEvent
+    });
+    expect(WatchEventEnvelopeSchema.parse(makeEnvelope("event", completedEvent)).data).toEqual(completedEvent);
+    expect(WatchEventEnvelopeSchema.parse(makeEnvelope("event", runEvent)).data).toEqual(runEvent);
+    expect(TeamRunStreamEventSchema.safeParse({ type: "run.created", runId: "run-1" }).success).toBe(false);
   });
 });
 

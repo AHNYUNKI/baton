@@ -34,6 +34,13 @@ export type TeamRunExecutionResult = {
   artifactPaths: string[];
 };
 
+export type TeamRunExecutorEvent = {
+  type: string;
+  runId: string;
+  roleId?: string;
+  chunk?: string;
+} & Record<string, unknown>;
+
 export type TeamRunProjectService = {
   get(projectId: string): Promise<Project | undefined>;
   getTeamPlan(projectId: string): Promise<TeamPlan | undefined>;
@@ -51,6 +58,7 @@ export type TeamRunExecutorOptions = {
   relayMaxChars?: number;
   write?: boolean;
   idGenerator?: () => string;
+  eventSink?: (event: TeamRunExecutorEvent) => void;
 };
 
 export type StartTeamRunOptions = {
@@ -105,6 +113,7 @@ export class TeamRunExecutor {
   private readonly relayMaxChars: number;
   private readonly write: boolean;
   private readonly idGenerator: () => string;
+  private readonly eventSink: ((event: TeamRunExecutorEvent) => void) | undefined;
 
   public constructor(options: TeamRunExecutorOptions) {
     this.projectService = options.projectService;
@@ -118,6 +127,7 @@ export class TeamRunExecutor {
     this.relayMaxChars = options.relayMaxChars ?? 1500;
     this.write = options.write === true;
     this.idGenerator = options.idGenerator ?? randomUUID;
+    this.eventSink = options.eventSink;
   }
 
   public async start(projectId: string, options: StartTeamRunOptions = {}): Promise<TeamRunExecutionResult> {
@@ -433,7 +443,19 @@ export class TeamRunExecutor {
           assignedAgentId: input.role.assignedAgentId,
           runDirectory: this.artifactStore.getRunDir(input.teamRun.id)
         },
-        ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs })
+        ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+        ...(this.eventSink === undefined
+          ? {}
+          : {
+              onOutput: (chunk: string): void => {
+                this.emitEvent({
+                  type: "teamRun.role.output",
+                  runId: input.teamRun.id,
+                  roleId: input.role.id,
+                  chunk
+                });
+              }
+            })
       });
       return { prompt, result };
     } catch (error) {
@@ -534,6 +556,15 @@ export class TeamRunExecutor {
       clock: this.clock
     });
     await logger.append({ type, runId: teamRun.id, payload });
+    this.emitEvent({ type, runId: teamRun.id, ...payload });
+  }
+
+  private emitEvent(event: TeamRunExecutorEvent): void {
+    try {
+      this.eventSink?.(event);
+    } catch {
+      // Streaming observers must never change team-run execution semantics.
+    }
   }
 
   private resolveWorktreeRoot(teamRunId: string): string {

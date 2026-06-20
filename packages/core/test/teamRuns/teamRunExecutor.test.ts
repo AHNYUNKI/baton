@@ -9,6 +9,7 @@ import {
   AgentWorkerRegistry,
   ArtifactStore,
   TeamRunExecutor,
+  type TeamRunExecutorEvent,
   TeamRunStore,
   estimateTokens,
   fixedClock,
@@ -90,6 +91,53 @@ describe("TeamRunExecutor", () => {
     expect(events.filter((event) => event.type === "teamRun.role.completed").map((event) => event.payload.usage)).toEqual(
       result.teamRun.roles.map((role) => role.usage)
     );
+  });
+
+  it("emits live role output events through eventSink while preserving event logs", async () => {
+    const streamEvents: TeamRunExecutorEvent[] = [];
+    const harness = await createHarness({ eventSink: (event) => streamEvents.push(event) });
+    await harness.executor.start("project-1");
+
+    const result = await harness.executor.decide("team-run-1", { decision: "approved" });
+
+    expect(result.outcome).toBe("completed");
+    expect(streamEvents.map((event) => event.type)).toEqual([
+      "teamRun.started",
+      "teamRun.role.started",
+      "teamRun.role.output",
+      "teamRun.role.completed",
+      "teamRun.role.started",
+      "teamRun.role.output",
+      "teamRun.role.completed",
+      "teamRun.role.started",
+      "teamRun.role.output",
+      "teamRun.role.completed",
+      "teamRun.completed"
+    ]);
+    expect(streamEvents.filter((event) => event.type === "teamRun.role.output").map((event) => [event.roleId, event.chunk])).toEqual([
+      ["lead", "stream lead\n"],
+      ["architect", "stream architect\n"],
+      ["implementer", "stream implementer\n"]
+    ]);
+    expect(streamEvents.every((event) => event.runId === "team-run-1")).toBe(true);
+
+    const persistedEvents = await readEvents(harness.artifactStore.getRunDir("team-run-1"));
+    expect(persistedEvents.map((event) => event.type)).not.toContain("teamRun.role.output");
+    expect(persistedEvents.map((event) => event.type)).toContain("teamRun.role.completed");
+  });
+
+  it("keeps executing when eventSink throws", async () => {
+    const harness = await createHarness({
+      eventSink: () => {
+        throw new Error("sink failed");
+      }
+    });
+    await harness.executor.start("project-1");
+
+    const result = await harness.executor.decide("team-run-1", { decision: "approved" });
+
+    expect(result.outcome).toBe("completed");
+    expect(result.teamRun.status).toBe("completed");
   });
 
   it("persists explanations extracted from completed role stdout", async () => {
@@ -187,6 +235,33 @@ describe("TeamRunExecutor", () => {
     expect(result.teamRun.approvals?.find((approval) => approval.stepId === "checkpoint:architect")).toMatchObject({
       status: "approved",
       note: "understood"
+    });
+  });
+
+  it("emits live output events when continuing from a checkpoint", async () => {
+    const streamEvents: TeamRunExecutorEvent[] = [];
+    const harness = await createHarness({
+      teamPlan: checkpointTeamPlanFixture(["architect"]),
+      eventSink: (event) => streamEvents.push(event)
+    });
+    await harness.executor.start("project-1");
+    await harness.executor.decide("team-run-1", { decision: "approved" });
+    streamEvents.length = 0;
+
+    const result = await harness.executor.continueCheckpoint("team-run-1", { decision: "continue" });
+
+    expect(result.outcome).toBe("completed");
+    expect(streamEvents.map((event) => event.type)).toEqual([
+      "teamRun.checkpoint.continued",
+      "teamRun.role.started",
+      "teamRun.role.output",
+      "teamRun.role.completed",
+      "teamRun.completed"
+    ]);
+    expect(streamEvents.find((event) => event.type === "teamRun.role.output")).toMatchObject({
+      runId: "team-run-1",
+      roleId: "implementer",
+      chunk: "stream implementer\n"
     });
   });
 
@@ -543,6 +618,7 @@ type HarnessOptions = {
   relayMaxChars?: number;
   write?: boolean;
   diffResult?: Partial<ProcessRunResult>;
+  eventSink?: (event: TeamRunExecutorEvent) => void;
 };
 
 async function createHarness(options: HarnessOptions = {}): Promise<{
@@ -575,6 +651,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<{
       clock: fixedClock("2026-06-17T00:00:00.000Z"),
       idGenerator: () => "team-run-1",
       write: options.write === true,
+      ...(options.eventSink === undefined ? {} : { eventSink: options.eventSink }),
       ...(options.relayMaxChars === undefined ? {} : { relayMaxChars: options.relayMaxChars })
     })
   };
@@ -590,6 +667,7 @@ class RecordingWorker implements WorkerAdapter {
 
   public async run(input: WorkerRunInput): Promise<WorkerRunResult> {
     this.inputs.push(input);
+    input.onOutput?.(`stream ${String(input.metadata?.roleId ?? "")}\n`);
     const result = this.results.shift() ?? { success: true, stdout: `ok ${String(input.metadata?.roleId ?? "")}` };
     return {
       success: result.success ?? true,

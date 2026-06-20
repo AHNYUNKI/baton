@@ -61,6 +61,23 @@ describe("CodexExecAdapter", () => {
     });
   });
 
+  it("passes live stdout and stderr chunks to onOutput", async () => {
+    const mock = createMockProcessRunner([{ stdout: "live stdout", stderr: "live stderr", exitCode: 0, durationMs: 1 }]);
+    const adapter = new CodexExecAdapter({ runner: mock.runner });
+    const chunks: string[] = [];
+    const onOutput = (chunk: string): void => {
+      chunks.push(chunk);
+    };
+
+    const result = await adapter.run({ cwd: "/repo", prompt: "prompt", onOutput });
+
+    expect(result.stdout).toBe("live stdout");
+    expect(result.stderr).toBe("live stderr");
+    expect(chunks).toEqual(["live stdout", "live stderr"]);
+    expect(mock.calls[0]?.options?.onStdout).toBe(onOutput);
+    expect(mock.calls[0]?.options?.onStderr).toBe(onOutput);
+  });
+
   it("maps non-zero and timeout-like exits to unsuccessful results", async () => {
     const mock = createMockProcessRunner([
       { stdout: "", stderr: "bad", exitCode: 2, durationMs: 10 },

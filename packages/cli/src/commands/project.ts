@@ -19,6 +19,7 @@ import {
   shouldPersistTeamRunDispatchConfig,
   writeTeamRunDispatchConfig,
   type ProcessRunner,
+  type TeamRunExecutorEvent,
   type TeamRunDispatchConfig,
   type WorkerAdapter
 } from "@baton/core";
@@ -145,12 +146,14 @@ type ParsedPlanRunStartArgs = {
   write: boolean;
   timeoutMs?: number;
   json: boolean;
+  stream: boolean;
 };
 
 type ParsedPlanRunDecisionArgs = {
   teamRunId: string;
   note?: string;
   json: boolean;
+  stream: boolean;
 };
 
 type ParsedPlanRunReviewArgs = {
@@ -165,6 +168,7 @@ type ParsedPlanRunContinueArgs = {
   decision: "continue" | "reject";
   note?: string;
   json: boolean;
+  stream: boolean;
 };
 
 type ParsedPlanRunShowArgs = {
@@ -361,13 +365,13 @@ async function startTeamRun(args: ParsedPlanRunStartArgs, context: CommandContex
     return preflight;
   }
 
-  const { executor, artifactStore } = createTeamRunExecutor(context, service, dispatchConfig);
+  const { executor, artifactStore } = createTeamRunExecutor(context, service, dispatchConfig, { stream: args.stream });
   const result = await executor.start(args.projectId, args.baseBranch === undefined ? {} : { baseBranch: args.baseBranch });
   if (result.outcome !== "failed" && shouldPersistTeamRunDispatchConfig(dispatchConfig)) {
     await writeTeamRunDispatchConfig(artifactStore, result.teamRun.id, dispatchConfig);
   }
 
-  printTeamRunResult(result.teamRun, args.json, context);
+  printPlanRunResult(result.teamRun, args, context);
   return result.outcome === "failed" || result.outcome === "cancelled" ? 1 : 0;
 }
 
@@ -386,13 +390,13 @@ async function decideTeamRun(
     }
   }
 
-  const { executor } = createTeamRunExecutor(context, service, dispatchConfig);
+  const { executor } = createTeamRunExecutor(context, service, dispatchConfig, { stream: args.stream });
   const result = await executor.decide(args.teamRunId, {
     decision,
     ...(args.note === undefined ? {} : { note: args.note })
   });
 
-  printTeamRunResult(result.teamRun, args.json, context);
+  printPlanRunResult(result.teamRun, args, context);
   return result.outcome === "failed" ? 1 : 0;
 }
 
@@ -421,13 +425,13 @@ async function continueTeamRunCheckpoint(
     }
   }
 
-  const { executor } = createTeamRunExecutor(context, service, dispatchConfig);
+  const { executor } = createTeamRunExecutor(context, service, dispatchConfig, { stream: args.stream });
   const result = await executor.continueCheckpoint(args.teamRunId, {
     decision: args.decision,
     ...(args.note === undefined ? {} : { note: args.note })
   });
 
-  printTeamRunResult(result.teamRun, args.json, context);
+  printPlanRunResult(result.teamRun, args, context);
   return result.outcome === "failed" ? 1 : 0;
 }
 
@@ -709,6 +713,7 @@ function parsePlanRunStartArgs(args: readonly string[]): ParsedPlanRunStartArgs 
   let write = false;
   let timeoutMs: number | undefined;
   let json = false;
+  let stream = false;
   for (let index = 1; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--base") {
@@ -749,6 +754,11 @@ function parsePlanRunStartArgs(args: readonly string[]): ParsedPlanRunStartArgs 
       continue;
     }
 
+    if (arg === "--stream") {
+      stream = true;
+      continue;
+    }
+
     return undefined;
   }
 
@@ -758,6 +768,7 @@ function parsePlanRunStartArgs(args: readonly string[]): ParsedPlanRunStartArgs 
     claude,
     write,
     json,
+    stream,
     ...(baseBranch === undefined ? {} : { baseBranch }),
     ...(timeoutMs === undefined ? {} : { timeoutMs })
   };
@@ -771,6 +782,7 @@ function parsePlanRunDecisionArgs(args: readonly string[]): ParsedPlanRunDecisio
 
   let note: string | undefined;
   let json = false;
+  let stream = false;
   for (let index = 1; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--note") {
@@ -787,12 +799,18 @@ function parsePlanRunDecisionArgs(args: readonly string[]): ParsedPlanRunDecisio
       continue;
     }
 
+    if (arg === "--stream") {
+      stream = true;
+      continue;
+    }
+
     return undefined;
   }
 
   return {
     teamRunId,
     json,
+    stream,
     ...(note === undefined ? {} : { note })
   };
 }
@@ -854,6 +872,7 @@ function parsePlanRunContinueArgs(args: readonly string[]): ParsedPlanRunContinu
   let decision: ParsedPlanRunContinueArgs["decision"] = "continue";
   let note: string | undefined;
   let json = false;
+  let stream = false;
   for (let index = 1; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--reject") {
@@ -875,6 +894,11 @@ function parsePlanRunContinueArgs(args: readonly string[]): ParsedPlanRunContinu
       continue;
     }
 
+    if (arg === "--stream") {
+      stream = true;
+      continue;
+    }
+
     return undefined;
   }
 
@@ -882,6 +906,7 @@ function parsePlanRunContinueArgs(args: readonly string[]): ParsedPlanRunContinu
     teamRunId,
     decision,
     json,
+    stream,
     ...(note === undefined ? {} : { note })
   };
 }
@@ -927,7 +952,8 @@ function parsePlanRunListArgs(args: readonly string[]): ParsedPlanRunListArgs | 
 function createTeamRunExecutor(
   context: CommandContext,
   projectService: ProjectService,
-  dispatchConfig?: TeamRunDispatchConfig
+  dispatchConfig?: TeamRunDispatchConfig,
+  options: { stream?: boolean } = {}
 ): { executor: TeamRunExecutor; artifactStore: ArtifactStore } {
   const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
   const { registry } = createAgentWorkerRegistry({
@@ -947,9 +973,23 @@ function createTeamRunExecutor(
       agentWorkerRegistry: registry,
       clock: context.clock,
       write: dispatchConfig?.write === true,
+      ...(options.stream === true ? { eventSink: (event: TeamRunExecutorEvent): void => printStreamEvent(event, context) } : {}),
       ...(dispatchConfig?.timeoutMs === undefined ? {} : { timeoutMs: dispatchConfig.timeoutMs })
     })
   };
+}
+
+function printPlanRunResult(teamRun: TeamRun, args: { json: boolean; stream: boolean }, context: CommandContext): void {
+  if (args.stream) {
+    context.stdout(JSON.stringify(makeEnvelope("team-run", teamRun)));
+    return;
+  }
+
+  printTeamRunResult(teamRun, args.json, context);
+}
+
+function printStreamEvent(event: TeamRunExecutorEvent, context: CommandContext): void {
+  context.stdout(JSON.stringify(makeEnvelope("event", event)));
 }
 
 function printTeamRunResult(teamRun: TeamRun, json: boolean, context: CommandContext, options: { includeUsage?: boolean } = {}): void {
@@ -1068,11 +1108,11 @@ function projectUsage(): string {
     "  baton project plan generate <projectId> --overview <text>",
     "  baton project plan show <projectId> [--json]",
     "  baton project plan set <projectId> [--file <path>]",
-    "  baton project plan run start <projectId> [--base <branch>] [--codex] [--claude] [--write] [--timeout-ms <ms>] [--json]",
-    "  baton project plan run approve <teamRunId> [--note <text>] [--json]",
+    "  baton project plan run start <projectId> [--base <branch>] [--codex] [--claude] [--write] [--timeout-ms <ms>] [--json] [--stream]",
+    "  baton project plan run approve <teamRunId> [--note <text>] [--json] [--stream]",
     "  baton project plan run reject <teamRunId> [--note <text>] [--json]",
     "  baton project plan run review <teamRunId> (--accept | --reject) [--note <text>] [--json]",
-    "  baton project plan run continue <teamRunId> [--reject] [--note <text>] [--json]",
+    "  baton project plan run continue <teamRunId> [--reject] [--note <text>] [--json] [--stream]",
     "  baton project plan run show <teamRunId> [--json]",
     "  baton project plan run list <projectId> [--json]"
   ].join("\n");

@@ -65,6 +65,23 @@ describe("ClaudeCodeAdapter", () => {
     });
   });
 
+  it("passes live stdout and stderr chunks to onOutput", async () => {
+    const mock = createMockProcessRunner([{ stdout: "live stdout", stderr: "live stderr", exitCode: 0, durationMs: 1 }]);
+    const adapter = new ClaudeCodeAdapter({ runner: mock.runner });
+    const chunks: string[] = [];
+    const onOutput = (chunk: string): void => {
+      chunks.push(chunk);
+    };
+
+    const result = await adapter.run({ cwd: "/repo/worktree", prompt: "prompt", onOutput });
+
+    expect(result.stdout).toBe("live stdout");
+    expect(result.stderr).toBe("live stderr");
+    expect(chunks).toEqual(["live stdout", "live stderr"]);
+    expect(mock.calls[0]?.options?.onStdout).toBe(onOutput);
+    expect(mock.calls[0]?.options?.onStderr).toBe(onOutput);
+  });
+
   it("adds read-only plan mode only when opted in", async () => {
     const mock = createMockProcessRunner();
     const adapter = new ClaudeCodeAdapter({ runner: mock.runner, readOnly: true });

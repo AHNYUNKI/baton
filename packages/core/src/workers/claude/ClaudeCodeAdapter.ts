@@ -76,9 +76,12 @@ export class ClaudeCodeAdapter implements WorkerAdapter {
   }
 
   private runnerOptions(input: WorkerRunInput): ProcessRunOptions {
-    return input.timeoutMs === undefined
-      ? { cwd: input.cwd, input: input.prompt }
-      : { cwd: input.cwd, input: input.prompt, timeoutMs: input.timeoutMs };
+    return {
+      cwd: input.cwd,
+      input: input.prompt,
+      ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+      ...(input.onOutput === undefined ? {} : { onStdout: input.onOutput, onStderr: input.onOutput })
+    };
   }
 
   private async writePromptArtifact(input: WorkerRunInput): Promise<string[]> {

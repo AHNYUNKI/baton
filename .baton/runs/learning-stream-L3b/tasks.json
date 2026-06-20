@@ -1,0 +1,47 @@
+{
+  "version": "1",
+  "runId": "learning-stream-L3b",
+  "buildsOn": "learning-review-polish-L3a.1",
+  "baseBranch": "origin/main",
+  "language": "typescript",
+  "gates": ["pnpm typecheck", "pnpm test", "pnpm build"],
+  "notes": "실행 명령(start/approve/continue --stream)이 워커 출력을 실시간 NDJSON으로 방출. TS 단독, 터미널 육안. stub 합성 청크 무토큰. Swift 페인+출력영역 재정리는 L3c. 기존 watch/Run/안전 정책 불변.",
+  "tasks": [
+    {
+      "id": "task-T01",
+      "title": "ProcessRunner onStdout/onStderr 콜백",
+      "description": "packages/core/src/ports/ProcessRunner.ts: ProcessRunOptions에 onStdout?:(chunk:string)=>void, onStderr?:(chunk:string)=>void. createNodeProcessRunner의 child.stdout/stderr.on('data')에서 기존 누적 + 콜백 호출(try/catch 삼킴). 미지정 시 현행. 테스트: 콜백이 청크마다 호출, 미지정 시 무영향.",
+      "targetFiles": ["packages/core/src/ports/ProcessRunner.ts", "packages/core/test/ports/processRunner.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-T02",
+      "title": "WorkerRunInput.onOutput + stub/codex/claude 전달",
+      "description": "packages/core/src/workers/WorkerAdapter.ts: WorkerRunInput에 onOutput?:(chunk:string)=>void. StubWorker.ts: onOutput 있으면 합성 진행 청크 몇 줄 방출 후 결과. codex/CodexExecAdapter.ts, claude/ClaudeCodeAdapter.ts: ProcessRunner.run에 onStdout: input.onOutput (+onStderr) 전달. 기존 결과/usage/읽기전용 보존. 테스트: 어댑터 onStdout=onOutput 전달, stub 합성 청크 방출.",
+      "targetFiles": ["packages/core/src/workers/WorkerAdapter.ts", "packages/core/src/workers/StubWorker.ts", "packages/core/src/workers/codex/CodexExecAdapter.ts", "packages/core/src/workers/claude/ClaudeCodeAdapter.ts", "packages/core/test/workers"],
+      "dependencies": ["task-T01"],
+      "acceptanceCriteria": ["AC-02", "AC-03", "AC-09"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-T03",
+      "title": "TeamRunExecutor eventSink (role.output 방출)",
+      "description": "packages/core/src/teamRuns/TeamRunExecutor.ts: 옵션 eventSink?:(event)=>void. invokeWorker에 onOutput=(chunk)=>eventSink?.({type:'teamRun.role.output', roleId, chunk}) 전달. role.started/completed/failed 및 teamRun.* 도 eventSink로 방출(+ events.jsonl 유지). continueCheckpoint 재개 경로도 동일 흐름. 스트림 이벤트 타입은 schemas readApi에 정의. 테스트(mock+stub): eventSink가 role.output 포함 시퀀스 순서 방출, eventSink 미설정 시 무영향.",
+      "targetFiles": ["packages/core/src/teamRuns/TeamRunExecutor.ts", "packages/schemas/src/readApi.schema.ts", "packages/core/test/teamRuns/teamRunExecutor.test.ts", "packages/schemas/test/readApi.test.ts"],
+      "dependencies": ["task-T02"],
+      "acceptanceCriteria": ["AC-04", "AC-08"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-T04",
+      "title": "CLI: start/approve/continue --stream (NDJSON 라이브)",
+      "description": "packages/cli/src/commands/project.ts: plan run start/approve/continue에 --stream 추가. 지정 시 createTeamRunExecutor에 eventSink=(e)=>context.stdout(JSON.stringify(makeEnvelope('event', e))) 주입 → 실행하며 NDJSON 라이브, 실행 후 마지막에 team-run 봉투 1줄. 미지정 시 현행 printTeamRunResult(단일 봉투). 도움말 갱신. 테스트: --stream 시 event 봉투 시퀀스 후 team-run 봉투(start/approve/continue), --stream 없으면 단일 봉투(회귀). 기존 run/watch 회귀 0.",
+      "targetFiles": ["packages/cli/src/commands/project.ts", "packages/cli/src/main.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-T03"],
+      "acceptanceCriteria": ["AC-05", "AC-06", "AC-07", "AC-10"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build"]
+    }
+  ]
+}
