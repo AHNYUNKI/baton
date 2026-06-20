@@ -1,0 +1,47 @@
+{
+  "version": "1",
+  "runId": "learning-checkpoint-L2",
+  "buildsOn": "learning-explain-dispatch-L1",
+  "baseBranch": "origin/main",
+  "language": "typescript",
+  "gates": ["pnpm typecheck", "pnpm test", "pnpm build"],
+  "notes": "학습 L2. checkpoint=true 역할 완료 시 awaiting-checkpoint로 멈춤→continue/reject. resume 패턴 재사용, pre-dispatch/post-run 게이트와 합성. TS 단독, stub 헤드리스. Swift UI는 L3, 질문/수정은 L2.1.",
+  "tasks": [
+    {
+      "id": "task-K01",
+      "title": "스키마: TeamRole.checkpoint? + awaiting-checkpoint",
+      "description": "packages/schemas/src/teamPlan.schema.ts: TeamRoleSchema에 checkpoint: z.boolean().optional(). packages/schemas/src/teamRun.schema.ts: TeamRunStatusSchema에 'awaiting-checkpoint' 추가. 선택/추가값이라 회귀 0. 테스트: checkpoint 부재/true 수용, awaiting-checkpoint 상태 수용, team-run 봉투 round-trip.",
+      "targetFiles": ["packages/schemas/src/teamPlan.schema.ts", "packages/schemas/src/teamRun.schema.ts", "packages/schemas/test/teamPlan.test.ts", "packages/schemas/test/teamRun.test.ts"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02", "AC-09"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test"]
+    },
+    {
+      "id": "task-K02",
+      "title": "플래너: 체크포인트 표시 지시",
+      "description": "packages/core/src/projects/planner.ts: buildPlanPrompt JSON 예시에 checkpoint 필드 + 규칙('설계·계획 등 사람이 검토해야 할 역할은 checkpoint: true로 표시, 나머지는 생략/false'). 추가 지시만, 기존 보존. 테스트: 출력에 checkpoint 지시/필드 포함.",
+      "targetFiles": ["packages/core/src/projects/planner.ts", "packages/core/test/planner.test.ts"],
+      "dependencies": ["task-K01"],
+      "acceptanceCriteria": ["AC-03"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-K03",
+      "title": "실행기: 체크포인트 멈춤 + continueCheckpoint + resume",
+      "description": "packages/core/src/teamRuns/TeamRunExecutor.ts: checkpointStepId(roleId)=`checkpoint:${roleId}`, checkpointApproval 헬퍼. executeFrom에서 역할 성공 완료 직후 planRole.checkpoint===true && checkpoint approval!=='approved'이면 awaiting-checkpoint + pending approval 저장 + event teamRun.checkpoint.awaiting → return outcome 'awaiting-checkpoint'. continueCheckpoint(teamRunId,{decision:'continue'|'reject',note?}): status awaiting-checkpoint + pending checkpoint approval 검증 → continue: approval approved + executeFrom(resume); reject: skipRolesAfter + cancelled + event. resume: awaiting-checkpoint→게이트 유지. TeamRunExecutionOutcome에 awaiting-checkpoint 추가. 실패 역할은 멈춤 없음, 완료 체크포인트는 resume 시 terminal skip(재멈춤 없음). 테스트(stub): 멈춤/continue 진행/reject cancelled/다중 체크포인트/continue 후 재멈춤 없음/checkpoint 없는 plan 현행.",
+      "targetFiles": ["packages/core/src/teamRuns/TeamRunExecutor.ts", "packages/core/src/index.ts", "packages/core/test/teamRuns/teamRunExecutor.test.ts"],
+      "dependencies": ["task-K01"],
+      "acceptanceCriteria": ["AC-04", "AC-05", "AC-06", "AC-07", "AC-10"],
+      "testCommands": ["corepack pnpm test"]
+    },
+    {
+      "id": "task-K04",
+      "title": "CLI: plan run continue + show 설명",
+      "description": "packages/cli/src/commands/project.ts: plan run continue <teamRunId> [--reject] [--note] [--json] → executor.continueCheckpoint. show: status awaiting-checkpoint면 현재 체크포인트 역할의 explanation/출력 + '계속: baton project plan run continue <id>' 안내. 도움말 갱신. 테스트: continue→진행, --reject→cancelled, show가 체크포인트 설명·안내 표시.",
+      "targetFiles": ["packages/cli/src/commands/project.ts", "packages/cli/src/main.ts", "packages/cli/test/cli.test.ts"],
+      "dependencies": ["task-K03"],
+      "acceptanceCriteria": ["AC-08"],
+      "testCommands": ["corepack pnpm typecheck", "corepack pnpm test", "corepack pnpm build"]
+    }
+  ]
+}

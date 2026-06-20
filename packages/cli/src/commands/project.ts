@@ -11,6 +11,7 @@ import {
   TeamRunStore,
   aggregateTeamRunUsage,
   batonHome,
+  checkpointRoleIdFromStepId,
   createAgentWorkerRegistry,
   createTeamRunDispatchConfig,
   generateTeamPlan,
@@ -155,6 +156,13 @@ type ParsedPlanRunDecisionArgs = {
 type ParsedPlanRunReviewArgs = {
   teamRunId: string;
   decision: "accepted" | "rejected";
+  note?: string;
+  json: boolean;
+};
+
+type ParsedPlanRunContinueArgs = {
+  teamRunId: string;
+  decision: "continue" | "reject";
   note?: string;
   json: boolean;
 };
@@ -315,6 +323,15 @@ async function projectPlanRunCommand(args: readonly string[], context: CommandCo
     return reviewTeamRun(parsed, context, service);
   }
 
+  if (subcommand === "continue") {
+    const parsed = parsePlanRunContinueArgs(rest);
+    if (parsed === undefined) {
+      context.stderr(projectUsage());
+      return 1;
+    }
+    return continueTeamRunCheckpoint(parsed, context, service);
+  }
+
   if (subcommand === "show") {
     const parsed = parsePlanRunShowArgs(rest);
     if (parsed === undefined) {
@@ -388,6 +405,30 @@ async function reviewTeamRun(args: ParsedPlanRunReviewArgs, context: CommandCont
 
   printTeamRunResult(result.teamRun, args.json, context);
   return 0;
+}
+
+async function continueTeamRunCheckpoint(
+  args: ParsedPlanRunContinueArgs,
+  context: CommandContext,
+  service: ProjectService
+): Promise<CommandResult> {
+  const artifactStore = new ArtifactStore({ workspaceRoot: context.cwd });
+  const dispatchConfig = args.decision === "continue" ? await readTeamRunDispatchConfig(artifactStore, args.teamRunId) : undefined;
+  if (dispatchConfig !== undefined) {
+    const preflight = await preflightTeamRunWorkers(dispatchConfig, context);
+    if (preflight !== 0) {
+      return preflight;
+    }
+  }
+
+  const { executor } = createTeamRunExecutor(context, service, dispatchConfig);
+  const result = await executor.continueCheckpoint(args.teamRunId, {
+    decision: args.decision,
+    ...(args.note === undefined ? {} : { note: args.note })
+  });
+
+  printTeamRunResult(result.teamRun, args.json, context);
+  return result.outcome === "failed" ? 1 : 0;
 }
 
 async function showTeamRun(args: ParsedPlanRunShowArgs, context: CommandContext): Promise<CommandResult> {
@@ -804,6 +845,47 @@ function parsePlanRunReviewArgs(args: readonly string[]): ParsedPlanRunReviewArg
   };
 }
 
+function parsePlanRunContinueArgs(args: readonly string[]): ParsedPlanRunContinueArgs | undefined {
+  const teamRunId = args[0];
+  if (teamRunId === undefined || teamRunId.trim().length === 0) {
+    return undefined;
+  }
+
+  let decision: ParsedPlanRunContinueArgs["decision"] = "continue";
+  let note: string | undefined;
+  let json = false;
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--reject") {
+      decision = "reject";
+      continue;
+    }
+
+    if (arg === "--note") {
+      note = args[index + 1];
+      if (note === undefined || note.trim().length === 0) {
+        return undefined;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
+
+    return undefined;
+  }
+
+  return {
+    teamRunId,
+    decision,
+    json,
+    ...(note === undefined ? {} : { note })
+  };
+}
+
 function parsePlanRunShowArgs(args: readonly string[]): ParsedPlanRunShowArgs | undefined {
   const teamRunId = args[0];
   if (teamRunId === undefined || teamRunId.trim().length === 0) {
@@ -897,10 +979,43 @@ function printTeamRunResult(teamRun: TeamRun, json: boolean, context: CommandCon
   if (teamRun.status === "awaiting-approval") {
     context.stdout(`승인 대기: baton project plan run approve ${teamRun.id}`);
   }
+  if (teamRun.status === "awaiting-checkpoint") {
+    printCheckpointDecisionPrompt(teamRun, context);
+  }
   if (teamRun.status === "awaiting-review") {
     context.stdout(`검토 대기: baton project plan run review ${teamRun.id} --accept|--reject`);
     context.stdout(`Diff artifact: ${path.join(new ArtifactStore({ workspaceRoot: context.cwd }).getRunDir(teamRun.id), "diff.patch")}`);
   }
+}
+
+function printCheckpointDecisionPrompt(teamRun: TeamRun, context: CommandContext): void {
+  const roleId = pendingCheckpointRoleId(teamRun);
+  if (roleId === undefined) {
+    context.stdout(`체크포인트 대기: pending checkpoint approval을 찾을 수 없습니다.`);
+    return;
+  }
+
+  const role = teamRun.roles.find((candidate) => candidate.roleId === roleId);
+  context.stdout(`체크포인트 대기: ${roleId}${role === undefined ? "" : ` (${role.name})`}`);
+  if (role?.explanation !== undefined && role.explanation.trim().length > 0) {
+    context.stdout("체크포인트 설명:");
+    printRoleExplanation(role.explanation, context);
+  }
+  if (role?.artifacts !== undefined && role.artifacts.length > 0) {
+    context.stdout("체크포인트 출력:");
+    for (const artifact of role.artifacts) {
+      context.stdout(`  ${artifact}`);
+    }
+  }
+  context.stdout(`계속: baton project plan run continue ${teamRun.id}`);
+  context.stdout(`중단: baton project plan run continue ${teamRun.id} --reject`);
+}
+
+function pendingCheckpointRoleId(teamRun: TeamRun): string | undefined {
+  const approval = teamRun.approvals?.find(
+    (candidate) => candidate.status === "pending" && checkpointRoleIdFromStepId(candidate.stepId) !== undefined
+  );
+  return approval === undefined ? undefined : checkpointRoleIdFromStepId(approval.stepId);
 }
 
 function printRoleExplanation(explanation: string | undefined, context: CommandContext): void {
@@ -957,6 +1072,7 @@ function projectUsage(): string {
     "  baton project plan run approve <teamRunId> [--note <text>] [--json]",
     "  baton project plan run reject <teamRunId> [--note <text>] [--json]",
     "  baton project plan run review <teamRunId> (--accept | --reject) [--note <text>] [--json]",
+    "  baton project plan run continue <teamRunId> [--reject] [--note <text>] [--json]",
     "  baton project plan run show <teamRunId> [--json]",
     "  baton project plan run list <projectId> [--json]"
   ].join("\n");

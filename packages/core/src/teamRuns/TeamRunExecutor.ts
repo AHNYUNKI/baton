@@ -20,7 +20,13 @@ import { readOrEstimateUsage } from "./usage.js";
 import type { AgentWorkerRegistry } from "./AgentWorkerRegistry.js";
 import type { TeamRunStore } from "./TeamRunStore.js";
 
-export type TeamRunExecutionOutcome = "completed" | "awaiting-approval" | "awaiting-review" | "failed" | "cancelled";
+export type TeamRunExecutionOutcome =
+  | "completed"
+  | "awaiting-approval"
+  | "awaiting-checkpoint"
+  | "awaiting-review"
+  | "failed"
+  | "cancelled";
 
 export type TeamRunExecutionResult = {
   teamRun: TeamRun;
@@ -62,6 +68,11 @@ export type ReviewTeamRunOptions = {
   note?: string;
 };
 
+export type ContinueCheckpointOptions = {
+  decision: "continue" | "reject";
+  note?: string;
+};
+
 type WorkerInvocation = {
   prompt: string;
   result: WorkerRunResult;
@@ -69,7 +80,18 @@ type WorkerInvocation = {
 
 const preDispatchStepId = "pre-dispatch";
 const postRunReviewStepId = "post-run-review";
+const checkpointStepPrefix = "checkpoint:";
 const terminalRoleStatuses = new Set<TeamRunRole["status"]>(["completed", "failed", "skipped"]);
+
+export function checkpointStepId(roleId: string): string {
+  return `${checkpointStepPrefix}${roleId}`;
+}
+
+export function checkpointRoleIdFromStepId(stepId: string): string | undefined {
+  return stepId.startsWith(checkpointStepPrefix) && stepId.length > checkpointStepPrefix.length
+    ? stepId.slice(checkpointStepPrefix.length)
+    : undefined;
+}
 
 export class TeamRunExecutor {
   private readonly projectService: TeamRunProjectService;
@@ -196,6 +218,33 @@ export class TeamRunExecutor {
     return { teamRun, outcome: nextStatus, artifactPaths: [] };
   }
 
+  public async continueCheckpoint(teamRunId: string, options: ContinueCheckpointOptions): Promise<TeamRunExecutionResult> {
+    const loaded = await this.teamRunStore.load(teamRunId);
+    const pendingApproval = pendingCheckpointApproval(loaded);
+    const roleId = pendingApproval === undefined ? undefined : checkpointRoleIdFromStepId(pendingApproval.stepId);
+    if (loaded.status !== "awaiting-checkpoint" || pendingApproval === undefined || roleId === undefined) {
+      throw new Error(`TeamRun is not awaiting a checkpoint decision: ${teamRunId}`);
+    }
+
+    if (options.decision === "reject") {
+      let teamRun = upsertApproval(
+        loaded,
+        this.buildApproval(teamRunId, pendingApproval.stepId, "rejected", options.note, pendingApproval.createdAt)
+      );
+      teamRun = skipRolesAfter(teamRun, roleId, `Checkpoint rejected: ${roleId}`, this.now());
+      teamRun = await this.teamRunStore.save({ ...teamRun, status: "cancelled" });
+      await this.teamRunEvent(teamRun, "teamRun.checkpoint.rejected", { roleId, note: options.note ?? "" });
+      return { teamRun, outcome: "cancelled", artifactPaths: [] };
+    }
+
+    const teamRun = await this.teamRunStore.save({
+      ...upsertApproval(loaded, this.buildApproval(teamRunId, pendingApproval.stepId, "approved", options.note, pendingApproval.createdAt)),
+      status: "running"
+    });
+    await this.teamRunEvent(teamRun, "teamRun.checkpoint.continued", { roleId, note: options.note ?? "" });
+    return this.executeFrom(teamRun);
+  }
+
   public async resume(teamRunId: string): Promise<TeamRunExecutionResult> {
     const loaded = await this.teamRunStore.load(teamRunId);
     if (loaded.status === "cancelled") {
@@ -206,6 +255,9 @@ export class TeamRunExecutor {
     }
     if (loaded.status === "completed") {
       return { teamRun: loaded, outcome: "completed", artifactPaths: [] };
+    }
+    if (loaded.status === "awaiting-checkpoint") {
+      return { teamRun: loaded, outcome: "awaiting-checkpoint", artifactPaths: [] };
     }
     if (loaded.status === "awaiting-review") {
       return { teamRun: loaded, outcome: "awaiting-review", artifactPaths: [] };
@@ -319,6 +371,16 @@ export class TeamRunExecutor {
           outcome: "failed",
           artifactPaths: diffArtifact === undefined ? artifacts : [...artifacts, diffArtifact.artifactPath]
         };
+      }
+
+      if (planRole.checkpoint === true && checkpointApproval(teamRun, roleId)?.status !== "approved") {
+        const existingApproval = checkpointApproval(teamRun, roleId);
+        const awaitingCheckpoint = await this.teamRunStore.save({
+          ...upsertApproval(teamRun, this.buildApproval(teamRun.id, checkpointStepId(roleId), "pending", undefined, existingApproval?.createdAt)),
+          status: "awaiting-checkpoint"
+        });
+        await this.teamRunEvent(awaitingCheckpoint, "teamRun.checkpoint.awaiting", { roleId });
+        return { teamRun: awaitingCheckpoint, outcome: "awaiting-checkpoint", artifactPaths: artifacts };
       }
     }
 
@@ -517,6 +579,16 @@ function preDispatchApproval(teamRun: TeamRun): Approval | undefined {
 
 function postRunReviewApproval(teamRun: TeamRun): Approval | undefined {
   return teamRun.approvals?.find((approval) => approval.stepId === postRunReviewStepId);
+}
+
+function checkpointApproval(teamRun: TeamRun, roleId: string): Approval | undefined {
+  return teamRun.approvals?.find((approval) => approval.stepId === checkpointStepId(roleId));
+}
+
+function pendingCheckpointApproval(teamRun: TeamRun): Approval | undefined {
+  return teamRun.approvals?.find(
+    (approval) => approval.status === "pending" && checkpointRoleIdFromStepId(approval.stepId) !== undefined
+  );
 }
 
 function upsertApproval(teamRun: TeamRun, approval: Approval): TeamRun {

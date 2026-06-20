@@ -45,6 +45,8 @@ describe("TeamPlan planner", () => {
     expect(prompt).toContain("- codex");
     expect(prompt).toContain("assignedAgentId");
     expect(prompt).toContain("reportsTo");
+    expect(prompt).toContain("checkpoint");
+    expect(prompt).toContain("checkpoint: true");
     expect(prompt).toContain("한국어");
     expect(prompt).toContain("2~3단계 계층");
     expect(prompt).toContain("대표 직속 매니저");

@@ -58,6 +58,7 @@ export function buildPlanPrompt(input: BuildPlanPromptInput): string {
             description: "string",
             assignedAgentId: input.agentIds[0] ?? "codex",
             instructions: "string",
+            checkpoint: true,
             reportsTo: null
           }
         ]
@@ -73,6 +74,7 @@ export function buildPlanPrompt(input: BuildPlanPromptInput): string {
     "- role ids must remain short English slugs, for example analysis-design.",
     "- assignedAgentId values must be copied exactly from the available values.",
     "- assignedAgentId must be one of the available values.",
+    "- 설계·계획 등 사람이 검토할 역할은 checkpoint: true로 표시하고, 나머지는 checkpoint를 생략하거나 false로 두세요.",
     "- 2~3단계 계층을 만들고 전부 평면인 조직은 지양하세요.",
     "- 일부 역할은 대표 직속 매니저로 두고 reportsTo를 null로 설정하세요.",
     "- 나머지 역할은 존재하는 매니저 role id로 reportsTo를 설정하세요.",

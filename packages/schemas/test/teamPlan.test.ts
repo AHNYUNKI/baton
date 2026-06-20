@@ -20,6 +20,20 @@ describe("TeamPlanSchema", () => {
 
     expect(parsed.roles[0]?.id).toBe("planner");
     expect(parsed.roles[0]?.name).toBe("Planner");
+    expect(parsed.roles[0]?.checkpoint).toBeUndefined();
+  });
+
+  it("accepts optional role checkpoints", () => {
+    const parsed = TeamPlanSchema.parse({
+      roles: [
+        {
+          ...validPlan.roles[0],
+          checkpoint: true
+        }
+      ]
+    });
+
+    expect(parsed.roles[0]?.checkpoint).toBe(true);
   });
 
   it("accepts optional and nullable role hierarchy references", () => {

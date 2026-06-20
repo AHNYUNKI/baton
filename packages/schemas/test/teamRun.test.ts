@@ -109,6 +109,44 @@ describe("TeamRun schema", () => {
     expect(TeamRunSchema.parse(teamRun)).toEqual(teamRun);
   });
 
+  it("accepts awaiting-checkpoint team runs with a checkpoint approval", () => {
+    const teamRun = teamRunFixture({
+      status: "awaiting-checkpoint",
+      roles: [
+        {
+          roleId: "architect",
+          name: "Architect",
+          assignedAgentId: "claude",
+          status: "completed",
+          explanation: "## 학습 설명\n- 무엇을 했나: 설계를 완료했습니다."
+        },
+        {
+          roleId: "implementer",
+          name: "Implementer",
+          assignedAgentId: "codex",
+          status: "planned"
+        }
+      ],
+      approvals: [
+        {
+          runId: "team-run-1",
+          stepId: "pre-dispatch",
+          status: "approved",
+          createdAt: "2026-06-17T00:00:00.000Z",
+          decidedAt: "2026-06-17T00:00:00.000Z"
+        },
+        {
+          runId: "team-run-1",
+          stepId: "checkpoint:architect",
+          status: "pending",
+          createdAt: "2026-06-17T00:01:00.000Z"
+        }
+      ]
+    });
+
+    expect(TeamRunSchema.parse(teamRun)).toEqual(teamRun);
+  });
+
   it("rejects missing required fields and invalid statuses", () => {
     expect(TeamRunSchema.safeParse({ ...teamRunFixture(), id: "" }).success).toBe(false);
     expect(TeamRunSchema.safeParse({ ...teamRunFixture(), status: "waiting" }).success).toBe(false);
