@@ -32,3 +32,27 @@ public func teamRunStatusLabel(_ status: String) -> String {
         status
     }
 }
+
+public func displayExplanation(_ raw: String) -> String {
+    let trimmedRaw = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedRaw.isEmpty else {
+        return ""
+    }
+
+    let normalized = raw
+        .replacingOccurrences(of: "\r\n", with: "\n")
+        .replacingOccurrences(of: "\r", with: "\n")
+    let lines = normalized.components(separatedBy: "\n")
+    guard let firstContentIndex = lines.firstIndex(where: { line in
+        !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }) else {
+        return ""
+    }
+
+    guard lines[firstContentIndex].trimmingCharacters(in: .whitespacesAndNewlines) == "## 학습 설명" else {
+        return trimmedRaw
+    }
+
+    let remaining = lines.dropFirst(firstContentIndex + 1).joined(separator: "\n")
+    return remaining.trimmingCharacters(in: .whitespacesAndNewlines)
+}
