@@ -18,6 +18,8 @@ public func teamRunStatusLabel(_ status: String) -> String {
         "승인 대기"
     case "awaiting-review":
         "검토 대기"
+    case "awaiting-checkpoint":
+        "검토 대기"
     case "completed":
         "완료"
     case "failed":

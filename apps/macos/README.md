@@ -21,6 +21,7 @@ read/write CLI contract through subprocess calls:
 - `baton project plan run start <projectId> [--codex] [--claude] [--write] [--base <branch>] [--timeout-ms <ms>] --json`
 - `baton project plan run approve|reject <teamRunId> [--note <text>] --json`
 - `baton project plan run review <teamRunId> --accept|--reject [--note <text>] --json`
+- `baton project plan run continue <teamRunId> [--reject] [--note <text>] --json`
 - `baton project plan run show <teamRunId> --json`
 - `baton project plan run list <projectId> --json`
 
@@ -70,6 +71,13 @@ v0.19.6 scopes local project detail actions to the project source path:
   directory behavior
 - dashboard, project list, and global run list views continue to use the
   existing global client
+
+v0.19.7 adds the learning review surface for TeamRuns:
+
+- role rows display the CLI-provided `explanation` as a collapsible `왜` panel
+- `awaiting-checkpoint` is shown as `검토 대기`
+- checkpoint gates call `baton project plan run continue <teamRunId> [--reject] --json`
+- the current checkpoint role is highlighted in the role list and gate panel
 
 See `UX.md` for the shared macOS design language and manual QA checklist.
 
@@ -167,6 +175,8 @@ Select a project and open `실행` to inspect and operate the current TeamRun:
   CLI decision command with an optional note.
 - when status is `awaiting-review`, the view shows `diffSummary`, points to
   `.baton/runs/<teamRunId>/diff.patch`, and calls review accept/reject.
+- when status is `awaiting-checkpoint`, the view shows the checkpoint role
+  explanation and calls continue/reject through the existing TeamRun CLI.
 - token usage is displayed per role and in total when the CLI provides usage.
 - `baton watch` events trigger `show` refreshes; manual `새로고침` remains the
   fallback.
@@ -242,6 +252,9 @@ support is not part of the gate. Verify these manually:
   refreshes.
 - On `검토 대기`, confirm `diffSummary`, `.baton/runs/<teamRunId>/diff.patch`,
   and review accept/reject actions are visible.
+- On `awaiting-checkpoint`, confirm the `왜` panel is visible on roles with
+  `explanation`, the checkpoint role is highlighted, and `계속`/`거부` refreshes
+  the selected TeamRun.
 - Confirm `baton watch` or `새로고침` updates the execution monitor and the
   `조직도` node statuses.
 - Confirm a local project selected from the sidebar shows CLI-created TeamRuns
@@ -274,7 +287,9 @@ support is not part of the gate. Verify these manually:
 - pure inbox filtering for `awaiting-approval` runs
 - TeamRun contract decoding for `team-run`/`team-run-list`
 - TeamRun BatonClient argv/envelope behavior
-- pure TeamRun status-by-role, Korean label, and monitor selection/gate logic
+- TeamRun checkpoint continue argv/envelope behavior
+- pure TeamRun status-by-role, Korean label, checkpoint role, and monitor
+  selection/gate logic
 
 The SwiftUI views are kept thin and compile through `swift build`; detailed UI
 behavior remains manual QA for this milestone.

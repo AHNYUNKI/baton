@@ -86,6 +86,24 @@ final class BatonClientTeamRunTests: XCTestCase {
         ])
     }
 
+    func testContinueCheckpointBuildsArgsAndDecodeEnvelope() async throws {
+        let runner = TeamRunClientFakeRunner(results: [
+            .success(.json(Self.teamRunEnvelope(id: "team-run-1", status: "running"))),
+            .success(.json(Self.teamRunEnvelope(id: "team-run-1", status: "cancelled")))
+        ])
+        let client = BatonClient(runner: runner)
+
+        let continued = try await client.continueCheckpoint(teamRunId: "team-run-1", reject: false, note: "go")
+        let rejected = try await client.continueCheckpoint(teamRunId: "team-run-1", reject: true, note: "stop")
+
+        XCTAssertEqual(continued.status, "running")
+        XCTAssertEqual(rejected.status, "cancelled")
+        XCTAssertEqual(runner.runCalls(), [
+            ["project", "plan", "run", "continue", "team-run-1", "--note", "go", "--json"],
+            ["project", "plan", "run", "continue", "team-run-1", "--reject", "--note", "stop", "--json"]
+        ])
+    }
+
     private static let teamRunListEnvelope = """
     {"schemaVersion":1,"kind":"team-run-list","data":{"teamRuns":[{"teamRunId":"team-run-1","projectId":"project-1","status":"running","createdAt":"2026-06-17T00:00:00.000Z","roleCount":2,"completedRoleCount":1}]}}
     """

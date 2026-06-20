@@ -1,0 +1,47 @@
+{
+  "version": "1",
+  "runId": "learning-review-view-L3a",
+  "buildsOn": "learning-checkpoint-L2",
+  "baseBranch": "origin/main",
+  "language": "swift",
+  "gates": ["swift build", "swift test", "git diff -- packages (empty)"],
+  "notes": "Swift 단독. 앱을 L1(explanation)/L2(awaiting-checkpoint/continue)에 따라잡기 + 설명 패널 + 체크포인트 계속/거부 버튼. 기존 baton CLI 소비만 — packages 무변경(TS 회귀 0). 로직 BatonKit 테스트, View 수동 QA. 스트리밍은 L3b/c.",
+  "tasks": [
+    {
+      "id": "task-V01",
+      "title": "계약: TeamRunRole.explanation? (+선택 approvals)",
+      "description": "apps/macos/Baton/Sources/BatonKit/Contract/TeamRun.swift: TeamRunRole에 explanation: String? 추가(Codable 관대 디코드, init 갱신). (선택) Approval Codable + TeamRun.approvals: [Approval]?(체크포인트 역할 식별용). 테스트: 실제 CLI team-run JSON 픽스처 디코드 — explanation 부재/존재, awaiting-checkpoint 상태, 추가 필드 무시.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonKit/Contract/TeamRun.swift", "apps/macos/Baton/Tests/BatonKitTests/TeamRunContractTests.swift"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02"],
+      "testCommands": ["swift test"]
+    },
+    {
+      "id": "task-V02",
+      "title": "라벨 + MonitorModel canContinueCheckpoint",
+      "description": "Sources/BatonKit/Org/TeamRunStatus.swift: teamRunStatusLabel에 'awaiting-checkpoint' → '검토 대기'(또는 '체크포인트 검토') 추가. Sources/BatonKit/Store/TeamRunMonitorModel.swift: canContinueCheckpoint(current?.status == 'awaiting-checkpoint'). (선택) checkpointRoleId(approvals pending checkpoint:<roleId> 또는 최근 완료 역할). 테스트: 라벨 매핑, canContinueCheckpoint, (있으면) checkpointRoleId.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonKit/Org/TeamRunStatus.swift", "apps/macos/Baton/Sources/BatonKit/Store/TeamRunMonitorModel.swift", "apps/macos/Baton/Tests/BatonKitTests/TeamRunStatusTests.swift", "apps/macos/Baton/Tests/BatonKitTests/TeamRunMonitorModelTests.swift"],
+      "dependencies": ["task-V01"],
+      "acceptanceCriteria": ["AC-03", "AC-04", "AC-05"],
+      "testCommands": ["swift test"]
+    },
+    {
+      "id": "task-V03",
+      "title": "BatonClient.continueCheckpoint",
+      "description": "Sources/BatonKit/Client/BatonClient.swift: continueCheckpoint(teamRunId, reject: Bool = false, note: String? = nil) -> TeamRun — 인자 ['project','plan','run','continue',id,(reject ? '--reject'),(note ? '--note',note),'--json'], expectedKind 'team-run'. approveTeamRun/reviewTeamRun 패턴 재사용. 테스트(mock CommandRunner): continue/reject 인자 + 봉투 디코드.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonKit/Client/BatonClient.swift", "apps/macos/Baton/Tests/BatonKitTests/BatonClientTeamRunTests.swift"],
+      "dependencies": ["task-V01"],
+      "acceptanceCriteria": ["AC-06"],
+      "testCommands": ["swift test"]
+    },
+    {
+      "id": "task-V04",
+      "title": "ExecutionView: 설명 패널 + 체크포인트 버튼",
+      "description": "Sources/BatonApp/ExecutionView.swift: 역할 카드에 explanation 있으면 '왜' 패널(접기/펼치기) 표시. 게이트 액션에 canContinueCheckpoint면 계속/거부 버튼(continueCheckpoint 호출) + 현재 체크포인트 역할 설명 강조. 기존 canApprove(승인/거부)/canReview(diff accept/reject) 유지. watch/새로고침 갱신 재사용. swift build 컴파일. apps/macos/README.md/UX.md: 학습 검토 뷰 + 수동 QA(체크포인트 멈춤→설명 검토→계속).",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonApp/ExecutionView.swift", "apps/macos/README.md", "apps/macos/UX.md"],
+      "dependencies": ["task-V02", "task-V03"],
+      "acceptanceCriteria": ["AC-07", "AC-08", "AC-09", "AC-10"],
+      "testCommands": ["swift build", "swift test"]
+    }
+  ]
+}

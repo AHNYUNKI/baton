@@ -17,6 +17,7 @@ struct ExecutionView: View {
     @State private var timeoutMs = ""
     @State private var approvalNote = ""
     @State private var reviewNote = ""
+    @State private var checkpointNote = ""
     @State private var actionMessage: String?
     @State private var actionErrorMessage: String?
     @State private var isStarting = false
@@ -191,7 +192,7 @@ struct ExecutionView: View {
         section(title: "역할") {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(orderedRoles(teamRun)) { role in
-                    TeamRunRoleRow(role: role)
+                    TeamRunRoleRow(role: role, isCheckpoint: role.roleId == monitor.checkpointRoleId)
                 }
             }
         }
@@ -224,6 +225,41 @@ struct ExecutionView: View {
                         }
                         actionButton("Reject", systemImage: "xmark.seal.fill", disabled: isActing) {
                             reviewTeamRun(accept: false)
+                        }
+                    }
+                } else if monitor.canContinueCheckpoint {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if let role = checkpointRole(in: teamRun) {
+                            Label("체크포인트 역할", systemImage: "paperclip")
+                                .font(.caption.weight(.heavy))
+                                .foregroundStyle(BatonTheme.amber)
+                            Text(role.name)
+                                .font(.headline.weight(.heavy))
+                                .foregroundStyle(BatonTheme.cream)
+                            if let explanation = nonEmpty(role.explanation) {
+                                Text(explanation)
+                                    .font(.callout)
+                                    .foregroundStyle(BatonTheme.cream)
+                                    .lineLimit(5)
+                            }
+                        } else {
+                            Text("체크포인트 검토가 필요합니다.")
+                                .font(.callout.weight(.bold))
+                                .foregroundStyle(BatonTheme.cream)
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(BatonTheme.softFill(.awaitingApproval))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    noteField("체크포인트 메모", text: $checkpointNote)
+                    HStack(spacing: 10) {
+                        actionButton("계속", systemImage: "arrow.forward.circle.fill", disabled: isActing) {
+                            continueCheckpoint(reject: false)
+                        }
+                        actionButton("거부", systemImage: "xmark.circle.fill", disabled: isActing) {
+                            continueCheckpoint(reject: true)
                         }
                     }
                 } else {
@@ -352,6 +388,13 @@ struct ExecutionView: View {
         }
     }
 
+    private func checkpointRole(in teamRun: TeamRun) -> TeamRunRole? {
+        guard let checkpointRoleId = monitor.checkpointRoleId else {
+            return nil
+        }
+        return teamRun.roles.first { $0.roleId == checkpointRoleId }
+    }
+
     private func totalInputTokens(_ teamRun: TeamRun) -> Int {
         teamRun.roles.reduce(0) { total, role in total + (role.usage?.inputTokens ?? 0) }
     }
@@ -436,6 +479,29 @@ struct ExecutionView: View {
         }
     }
 
+    private func continueCheckpoint(reject: Bool) {
+        guard let teamRunId = monitor.current?.id else {
+            return
+        }
+
+        isActing = true
+        actionMessage = nil
+        actionErrorMessage = nil
+        let note = emptyToNil(checkpointNote)
+
+        Task { @MainActor in
+            do {
+                let updated = try await client.continueCheckpoint(teamRunId: teamRunId, reject: reject, note: note)
+                monitor.setCurrent(updated)
+                actionMessage = reject ? "체크포인트를 거부했습니다." : "체크포인트를 계속 진행했습니다."
+                await onRefresh()
+            } catch {
+                actionErrorMessage = error.localizedDescription
+            }
+            isActing = false
+        }
+    }
+
     @MainActor
     private func loadSelectedTeamRun(id: String) async {
         isActing = true
@@ -462,6 +528,14 @@ struct ExecutionView: View {
     }
 
     private func emptyToNil(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        guard let value else {
+            return nil
+        }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
@@ -522,6 +596,9 @@ struct ExecutionView: View {
 
 private struct TeamRunRoleRow: View {
     let role: TeamRunRole
+    let isCheckpoint: Bool
+
+    @State private var isExplanationExpanded = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -546,11 +623,33 @@ private struct TeamRunRoleRow: View {
                     .clipShape(Capsule())
             }
 
+            if isCheckpoint {
+                Label("현재 체크포인트", systemImage: "paperclip")
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(BatonTheme.amber)
+            }
             if let summary = role.summary, !summary.isEmpty {
                 Text(summary)
                     .font(.callout)
                     .foregroundStyle(BatonTheme.cream)
                     .lineLimit(3)
+            }
+            if let explanation = trimmedExplanation {
+                DisclosureGroup(isExpanded: $isExplanationExpanded) {
+                    Text(explanation)
+                        .font(.callout)
+                        .foregroundStyle(BatonTheme.cream)
+                        .lineLimit(isExplanationExpanded ? nil : 3)
+                        .padding(.top, 4)
+                } label: {
+                    Label("왜", systemImage: "questionmark.circle")
+                        .font(.caption.weight(.heavy))
+                        .foregroundStyle(BatonTheme.amber)
+                }
+                .tint(BatonTheme.amber)
+                .padding(10)
+                .background(BatonTheme.softFill(.awaitingApproval))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
             if let reason = role.reason, !reason.isEmpty {
                 Text(reason)
@@ -567,6 +666,18 @@ private struct TeamRunRoleRow: View {
         .padding(14)
         .background(BatonTheme.surfaceElevated)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(isCheckpoint ? BatonTheme.amber.opacity(0.85) : Color.clear, lineWidth: 1.5)
+        }
+    }
+
+    private var trimmedExplanation: String? {
+        guard let explanation = role.explanation else {
+            return nil
+        }
+        let trimmed = explanation.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -593,7 +704,7 @@ private struct TeamRunStatusBadge: View {
         switch status {
         case "running":
             .running
-        case "awaiting-approval", "awaiting-review":
+        case "awaiting-approval", "awaiting-review", "awaiting-checkpoint":
             .awaitingApproval
         case "completed":
             .completed
