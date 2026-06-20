@@ -230,18 +230,12 @@ struct ExecutionView: View {
                 } else if monitor.canContinueCheckpoint {
                     VStack(alignment: .leading, spacing: 10) {
                         if let role = checkpointRole(in: teamRun) {
-                            Label("체크포인트 역할", systemImage: "paperclip")
-                                .font(.caption.weight(.heavy))
-                                .foregroundStyle(BatonTheme.amber)
                             Text(role.name)
                                 .font(.headline.weight(.heavy))
                                 .foregroundStyle(BatonTheme.cream)
-                            if let explanation = nonEmpty(role.explanation) {
-                                Text(explanation)
-                                    .font(.callout)
-                                    .foregroundStyle(BatonTheme.cream)
-                                    .lineLimit(5)
-                            }
+                            Text("위에서 강조된 ‘\(role.name)’ 역할의 설명을 확인한 뒤 계속하세요.")
+                                .font(.callout)
+                                .foregroundStyle(BatonTheme.cream)
                         } else {
                             Text("체크포인트 검토가 필요합니다.")
                                 .font(.callout.weight(.bold))
@@ -532,14 +526,6 @@ struct ExecutionView: View {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private func nonEmpty(_ value: String?) -> String? {
-        guard let value else {
-            return nil
-        }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
     private func noteField(_ title: String, text: Binding<String>) -> some View {
         TextField(title, text: text)
             .textFieldStyle(.plain)
@@ -634,20 +620,36 @@ private struct TeamRunRoleRow: View {
                     .foregroundStyle(BatonTheme.cream)
                     .lineLimit(3)
             }
-            if let explanation = trimmedExplanation {
-                DisclosureGroup(isExpanded: $isExplanationExpanded) {
-                    Text(explanation)
-                        .font(.callout)
-                        .foregroundStyle(BatonTheme.cream)
-                        .lineLimit(isExplanationExpanded ? nil : 3)
-                        .padding(.top, 4)
-                } label: {
-                    Label("왜", systemImage: "questionmark.circle")
-                        .font(.caption.weight(.heavy))
-                        .foregroundStyle(BatonTheme.amber)
+            if let explanation = displayableExplanation {
+                VStack(alignment: .leading, spacing: 8) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            isExplanationExpanded.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "questionmark.circle")
+                            Text("왜")
+                            Spacer()
+                            Image(systemName: isExplanationExpanded ? "chevron.down" : "chevron.right")
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(BatonTheme.amber)
+
+                    if isExplanationExpanded {
+                        Text(explanation)
+                            .font(.callout)
+                            .foregroundStyle(BatonTheme.cream)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                .tint(BatonTheme.amber)
                 .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .background(BatonTheme.softFill(.awaitingApproval))
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
@@ -672,12 +674,12 @@ private struct TeamRunRoleRow: View {
         }
     }
 
-    private var trimmedExplanation: String? {
+    private var displayableExplanation: String? {
         guard let explanation = role.explanation else {
             return nil
         }
-        let trimmed = explanation.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        let displayed = displayExplanation(explanation)
+        return displayed.isEmpty ? nil : displayed
     }
 }
 

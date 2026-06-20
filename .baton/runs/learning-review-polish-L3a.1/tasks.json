@@ -1,0 +1,38 @@
+{
+  "version": "1",
+  "runId": "learning-review-polish-L3a.1",
+  "buildsOn": "learning-review-view-L3a",
+  "baseBranch": "origin/main",
+  "language": "swift",
+  "gates": ["swift build", "swift test", "git diff -- packages (empty)"],
+  "notes": "L3a QA 수정. '왜' 패널 가독성(DisclosureGroup→커스텀 접기 전체폭 좌측 + ## 학습 설명 헤딩 제거) + 게이트 섹션 설명 중복 제거. Swift 단독, packages 무변경(TS 회귀 0). displayExplanation 순수 테스트, View 수동 QA.",
+  "tasks": [
+    {
+      "id": "task-P01",
+      "title": "순수: displayExplanation (헤딩 제거)",
+      "description": "apps/macos/Baton/Sources/BatonKit/Org/TeamRunStatus.swift(또는 신규 Explanation.swift): public func displayExplanation(_ raw: String) -> String — 선두 빈 줄 무시 후 첫 비어있지 않은 줄이 트림 기준 '## 학습 설명'이면 그 줄 제거, 나머지 트림 반환. 헤딩 없으면 원문 트림. 순수. 테스트: 헤딩 제거/헤딩 없음(원문)/빈 문자열/선두 공백·빈 줄.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonKit/Org/TeamRunStatus.swift", "apps/macos/Baton/Tests/BatonKitTests/ExplanationDisplayTests.swift"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01", "AC-02"],
+      "testCommands": ["swift test"]
+    },
+    {
+      "id": "task-P02",
+      "title": "ExecutionView: 왜 패널 커스텀 접기(전체폭 좌측)",
+      "description": "Sources/BatonApp/ExecutionView.swift TeamRunRoleRow: explanation '왜' 패널의 DisclosureGroup 제거 → @State isExplanationExpanded Button 토글(라벨 '왜' + chevron) + 펼침 시 Text(displayExplanation(explanation)) 를 .frame(maxWidth:.infinity, alignment:.leading).fixedSize(horizontal:false, vertical:true)로 전체폭 좌측·줄바꿈. 배경/패딩은 패널 컨테이너(들여쓰기 없이). 헤딩 미노출. swift build 컴파일.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonApp/ExecutionView.swift"],
+      "dependencies": ["task-P01"],
+      "acceptanceCriteria": ["AC-03", "AC-04"],
+      "testCommands": ["swift build"]
+    },
+    {
+      "id": "task-P03",
+      "title": "ExecutionView: 게이트 설명 중복 제거",
+      "description": "Sources/BatonApp/ExecutionView.swift 게이트 canContinueCheckpoint 블록(~231–254줄): 체크포인트 역할 explanation 본문 재출력 제거. 역할명 + '위에서 강조된 \\'<역할명>\\' 역할의 설명을 확인한 뒤 계속하세요.' 안내 + 기존 계속/거부 버튼만 유지. swift build 컴파일. (선택) UX.md 한 줄.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonApp/ExecutionView.swift", "apps/macos/UX.md"],
+      "dependencies": ["task-P01"],
+      "acceptanceCriteria": ["AC-05", "AC-06"],
+      "testCommands": ["swift build", "swift test"]
+    }
+  ]
+}
