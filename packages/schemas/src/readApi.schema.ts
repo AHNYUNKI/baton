@@ -89,6 +89,17 @@ export const WatchEventSchema = z.discriminatedUnion("type", [
   })
 ]);
 
+export const TeamRunStreamEventSchema = z
+  .object({
+    type: z.string().regex(/^teamRun\./),
+    runId: z.string().min(1),
+    roleId: z.string().min(1).optional(),
+    chunk: z.string().optional()
+  })
+  .passthrough();
+
+export const ReadApiEventSchema = z.union([WatchEventSchema, TeamRunStreamEventSchema]);
+
 export const JsonEnvelopeSchema = z.object({
   schemaVersion: z.literal(READ_API_SCHEMA_VERSION),
   kind: z.string().min(1),
@@ -132,7 +143,7 @@ export const TeamRunListEnvelopeSchema = JsonEnvelopeSchema.extend({
 
 export const WatchEventEnvelopeSchema = JsonEnvelopeSchema.extend({
   kind: z.literal("event"),
-  data: WatchEventSchema
+  data: ReadApiEventSchema
 });
 
 export type RunSummaryJson = z.infer<typeof RunSummaryJsonSchema>;
@@ -147,6 +158,8 @@ export type TeamPlanJson = z.infer<typeof TeamPlanEnvelopeSchema>["data"];
 export type TeamRunJson = z.infer<typeof TeamRunEnvelopeSchema>["data"];
 export type TeamRunListEnvelopeJson = z.infer<typeof TeamRunListEnvelopeSchema>["data"];
 export type WatchEvent = z.infer<typeof WatchEventSchema>;
+export type TeamRunStreamEvent = z.infer<typeof TeamRunStreamEventSchema>;
+export type ReadApiEvent = z.infer<typeof ReadApiEventSchema>;
 
 export type JsonEnvelope<TKind extends string = string, TData = unknown> = {
   schemaVersion: typeof READ_API_SCHEMA_VERSION;

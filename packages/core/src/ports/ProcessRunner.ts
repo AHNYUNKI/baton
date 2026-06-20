@@ -5,6 +5,8 @@ export type ProcessRunOptions = {
   env?: NodeJS.ProcessEnv;
   input?: string;
   timeoutMs?: number;
+  onStdout?: (chunk: string) => void;
+  onStderr?: (chunk: string) => void;
 };
 
 export type ProcessRunResult = {
@@ -54,11 +56,15 @@ export function createNodeProcessRunner(): ProcessRunner {
               }, options.timeoutMs);
 
         child.stdout.on("data", (chunk: Buffer) => {
-          stdout += chunk.toString("utf8");
+          const text = chunk.toString("utf8");
+          stdout += text;
+          callOutputCallback(options.onStdout, text);
         });
 
         child.stderr.on("data", (chunk: Buffer) => {
-          stderr += chunk.toString("utf8");
+          const text = chunk.toString("utf8");
+          stderr += text;
+          callOutputCallback(options.onStderr, text);
         });
 
         if (options.input !== undefined) {
@@ -110,15 +116,29 @@ export function createMockProcessRunner(initialResults: ProcessRunResult[] = [])
         const call = options === undefined ? { command, args: [...args] } : { command, args: [...args], options };
         calls.push(call);
 
-        return (
+        const result =
           queuedResults.shift() ?? {
             stdout: "",
             stderr: "",
             exitCode: 0,
             durationMs: 0
-          }
-        );
+          };
+        if (result.stdout.length > 0) {
+          callOutputCallback(options?.onStdout, result.stdout);
+        }
+        if (result.stderr.length > 0) {
+          callOutputCallback(options?.onStderr, result.stderr);
+        }
+        return result;
       }
     }
   };
+}
+
+function callOutputCallback(callback: ((chunk: string) => void) | undefined, chunk: string): void {
+  try {
+    callback?.(chunk);
+  } catch {
+    // Streaming observers must never change process execution semantics.
+  }
 }

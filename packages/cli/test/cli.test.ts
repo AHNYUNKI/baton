@@ -439,6 +439,7 @@ describe("@baton/cli", () => {
       })
     ).toBe(0);
 
+    expect(output).toHaveLength(1);
     const started = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
     expect(started.status).toBe("awaiting-approval");
     expect(started.roles.map((role) => role.status)).toEqual(["planned", "planned"]);
@@ -462,6 +463,7 @@ describe("@baton/cli", () => {
       })
     ).toBe(0);
 
+    expect(output).toHaveLength(1);
     const approved = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
     expect(approved.status).toBe("completed");
     expect(approved.roles.map((role) => role.status)).toEqual(["completed", "completed"]);
@@ -510,6 +512,59 @@ describe("@baton/cli", () => {
     ]);
   });
 
+  it("streams project TeamRun start and approve as NDJSON using StubWorker", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "baton-cli-home-"));
+    const localDir = await mkdtemp(path.join(tmpdir(), "baton-cli-team-run-stream-"));
+    const env = { ...process.env, BATON_HOME: homeDir };
+    const output: string[] = [];
+    const mock = createMockProcessRunner([{ stdout: "", stderr: "", exitCode: 0, durationMs: 2 }]);
+    const projectId = await createProjectWithPlan({ env, cwd: localDir });
+
+    expect(
+      await runCli(["project", "plan", "run", "start", projectId, "--stream"], {
+        cwd: localDir,
+        env,
+        runner: mock.runner,
+        clock: fixedClock("2026-06-17T00:00:00.000Z"),
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+
+    expect(output).toHaveLength(2);
+    const startEvent = WatchEventEnvelopeSchema.parse(JSON.parse(output[0] ?? ""));
+    const started = TeamRunEnvelopeSchema.parse(JSON.parse(output[1] ?? "")).data;
+    expect(startEvent.kind).toBe("event");
+    expect(startEvent.data).toMatchObject({ type: "teamRun.started", runId: started.id, projectId });
+    expect(started.status).toBe("awaiting-approval");
+
+    output.length = 0;
+    expect(
+      await runCli(["project", "plan", "run", "approve", started.id, "--note", "go", "--stream"], {
+        cwd: localDir,
+        env,
+        runner: mock.runner,
+        clock: fixedClock("2026-06-17T00:00:00.000Z"),
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+
+    const approveEvents = output.slice(0, -1).map((line) => WatchEventEnvelopeSchema.parse(JSON.parse(line)));
+    const approved = TeamRunEnvelopeSchema.parse(JSON.parse(output[output.length - 1] ?? "")).data;
+    expect(approveEvents.every((event) => event.kind === "event")).toBe(true);
+    expect(approveEvents.map((event) => event.data.type)).toEqual(
+      expect.arrayContaining(["teamRun.role.started", "teamRun.role.output", "teamRun.role.completed", "teamRun.completed"])
+    );
+    expect(readStreamChunks(approveEvents)).toEqual(
+      expect.arrayContaining([
+        "StubWorker: preparing deterministic role output\n",
+        "StubWorker: writing synthetic progress chunk\n",
+        "StubWorker: completed without external AI\n"
+      ])
+    );
+    expect(approved.status).toBe("completed");
+    expect(approved.roles.map((role) => role.status)).toEqual(["completed", "completed"]);
+  });
+
   it("continues a project TeamRun after a checkpoint using StubWorker", async () => {
     const homeDir = await mkdtemp(path.join(tmpdir(), "baton-cli-home-"));
     const localDir = await mkdtemp(path.join(tmpdir(), "baton-cli-team-run-checkpoint-"));
@@ -547,6 +602,7 @@ describe("@baton/cli", () => {
         stdout: (line) => output.push(line)
       })
     ).toBe(0);
+    expect(output).toHaveLength(1);
     const started = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
 
     output.length = 0;
@@ -559,6 +615,7 @@ describe("@baton/cli", () => {
       })
     ).toBe(0);
 
+    expect(output).toHaveLength(1);
     const awaitingCheckpoint = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
     expect(awaitingCheckpoint.status).toBe("awaiting-checkpoint");
     expect(awaitingCheckpoint.roles.map((role) => [role.roleId, role.status])).toEqual([
@@ -586,12 +643,82 @@ describe("@baton/cli", () => {
       })
     ).toBe(0);
 
+    expect(output).toHaveLength(1);
     const completed = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
     expect(completed.status).toBe("completed");
     expect(completed.roles.map((role) => [role.roleId, role.status])).toEqual([
       ["lead", "completed"],
       ["implementer", "completed"]
     ]);
+    expect(completed.approvals?.find((approval) => approval.stepId === "checkpoint:lead")).toMatchObject({
+      status: "approved",
+      note: "understood"
+    });
+  });
+
+  it("streams project TeamRun continue as NDJSON after a checkpoint", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "baton-cli-home-"));
+    const localDir = await mkdtemp(path.join(tmpdir(), "baton-cli-team-run-continue-stream-"));
+    const env = { ...process.env, BATON_HOME: homeDir };
+    const output: string[] = [];
+    const mock = createMockProcessRunner([{ stdout: "", stderr: "", exitCode: 0, durationMs: 2 }]);
+    const plan: TeamPlan = {
+      roles: [
+        {
+          id: "lead",
+          name: "Lead",
+          description: "Coordinates the run.",
+          assignedAgentId: "codex",
+          instructions: "Coordinate safely.",
+          checkpoint: true
+        },
+        {
+          id: "implementer",
+          name: "Implementer",
+          description: "Implements the run.",
+          assignedAgentId: "codex",
+          instructions: "Implement safely.",
+          reportsTo: "lead"
+        }
+      ]
+    };
+    const projectId = await createProjectWithPlan({ env, cwd: localDir, plan });
+
+    expect(
+      await runCli(["project", "plan", "run", "start", projectId, "--json"], {
+        cwd: localDir,
+        env,
+        runner: mock.runner,
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+    const started = TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data;
+
+    output.length = 0;
+    expect(await runCli(["project", "plan", "run", "approve", started.id, "--json"], { cwd: localDir, env, stdout: (line) => output.push(line) })).toBe(0);
+    expect(TeamRunEnvelopeSchema.parse(JSON.parse(output.join("\n"))).data.status).toBe("awaiting-checkpoint");
+
+    output.length = 0;
+    expect(
+      await runCli(["project", "plan", "run", "continue", started.id, "--note", "understood", "--stream"], {
+        cwd: localDir,
+        env,
+        stdout: (line) => output.push(line)
+      })
+    ).toBe(0);
+
+    const events = output.slice(0, -1).map((line) => WatchEventEnvelopeSchema.parse(JSON.parse(line)));
+    const completed = TeamRunEnvelopeSchema.parse(JSON.parse(output[output.length - 1] ?? "")).data;
+    expect(events.map((event) => event.data.type)).toEqual(
+      expect.arrayContaining(["teamRun.checkpoint.continued", "teamRun.role.started", "teamRun.role.output", "teamRun.role.completed"])
+    );
+    expect(events.find((event) => event.data.type === "teamRun.role.output")).toMatchObject({
+      data: {
+        roleId: "implementer",
+        chunk: "StubWorker: preparing deterministic role output\n"
+      }
+    });
+    expect(completed.status).toBe("completed");
     expect(completed.approvals?.find((approval) => approval.stepId === "checkpoint:lead")).toMatchObject({
       status: "approved",
       note: "understood"
@@ -2578,6 +2705,12 @@ function usageTotals(teamRun: TeamRun): { inputTokens: number; outputTokens: num
       };
     },
     { inputTokens: 0, outputTokens: 0, totalTokens: 0, roles: 0 }
+  );
+}
+
+function readStreamChunks(events: Array<ReturnType<typeof WatchEventEnvelopeSchema.parse>>): string[] {
+  return events.flatMap((event) =>
+    event.data.type === "teamRun.role.output" && "chunk" in event.data && typeof event.data.chunk === "string" ? [event.data.chunk] : []
   );
 }
 
