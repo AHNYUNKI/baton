@@ -6,6 +6,7 @@ export const TeamRoleSchema = z.object({
   description: z.string(),
   assignedAgentId: z.string().trim().min(1),
   instructions: z.string(),
+  checkpoint: z.boolean().optional(),
   reportsTo: z.string().trim().min(1).nullish()
 });
 

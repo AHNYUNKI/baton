@@ -7,6 +7,7 @@ export const TeamRunRoleStatusSchema = z.enum(["planned", "running", "completed"
 export const TeamRunStatusSchema = z.enum([
   "planned",
   "awaiting-approval",
+  "awaiting-checkpoint",
   "awaiting-review",
   "running",
   "completed",

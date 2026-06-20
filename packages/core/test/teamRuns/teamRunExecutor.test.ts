@@ -132,6 +132,164 @@ describe("TeamRunExecutor", () => {
     );
   });
 
+  it("waits at a successful checkpoint role before dispatching the next role", async () => {
+    const harness = await createHarness({
+      teamPlan: checkpointTeamPlanFixture(["architect"]),
+      workerResults: [
+        { stdout: "ok lead" },
+        {
+          stdout: [
+            "architect result",
+            "",
+            "## 학습 설명",
+            "- 무엇을 했나: 아키텍처를 설명했습니다."
+          ].join("\n")
+        }
+      ]
+    });
+    await harness.executor.start("project-1");
+
+    const result = await harness.executor.decide("team-run-1", { decision: "approved" });
+
+    expect(result.outcome).toBe("awaiting-checkpoint");
+    expect(result.teamRun.status).toBe("awaiting-checkpoint");
+    expect(result.teamRun.roles.map((role) => [role.roleId, role.status])).toEqual([
+      ["lead", "completed"],
+      ["architect", "completed"],
+      ["implementer", "planned"]
+    ]);
+    expect(result.teamRun.roles.find((role) => role.roleId === "architect")?.explanation).toContain("아키텍처를 설명했습니다");
+    expect(result.teamRun.approvals?.find((approval) => approval.stepId === "checkpoint:architect")).toMatchObject({
+      status: "pending"
+    });
+    expect(harness.worker.inputs.map((input) => input.metadata?.roleId)).toEqual(["lead", "architect"]);
+
+    const events = await readEvents(harness.artifactStore.getRunDir("team-run-1"));
+    expect(events.map((event) => event.type)).toContain("teamRun.checkpoint.awaiting");
+  });
+
+  it("continues from a checkpoint without re-running the completed checkpoint role", async () => {
+    const harness = await createHarness({ teamPlan: checkpointTeamPlanFixture(["architect"]) });
+    await harness.executor.start("project-1");
+    await harness.executor.decide("team-run-1", { decision: "approved" });
+    harness.worker.inputs.length = 0;
+
+    const result = await harness.executor.continueCheckpoint("team-run-1", { decision: "continue", note: "understood" });
+
+    expect(result.outcome).toBe("completed");
+    expect(result.teamRun.status).toBe("completed");
+    expect(harness.worker.inputs.map((input) => input.metadata?.roleId)).toEqual(["implementer"]);
+    expect(result.teamRun.roles.map((role) => [role.roleId, role.status])).toEqual([
+      ["lead", "completed"],
+      ["architect", "completed"],
+      ["implementer", "completed"]
+    ]);
+    expect(result.teamRun.approvals?.find((approval) => approval.stepId === "checkpoint:architect")).toMatchObject({
+      status: "approved",
+      note: "understood"
+    });
+  });
+
+  it("rejects a checkpoint by cancelling and skipping remaining roles", async () => {
+    const harness = await createHarness({ teamPlan: checkpointTeamPlanFixture(["architect"]) });
+    await harness.executor.start("project-1");
+    await harness.executor.decide("team-run-1", { decision: "approved" });
+    harness.worker.inputs.length = 0;
+
+    const result = await harness.executor.continueCheckpoint("team-run-1", { decision: "reject", note: "stop here" });
+
+    expect(result.outcome).toBe("cancelled");
+    expect(result.teamRun.status).toBe("cancelled");
+    expect(result.teamRun.roles.map((role) => [role.roleId, role.status, role.reason])).toEqual([
+      ["lead", "completed", "Completed by stub worker."],
+      ["architect", "completed", "Completed by stub worker."],
+      ["implementer", "skipped", "Checkpoint rejected: architect"]
+    ]);
+    expect(result.teamRun.approvals?.find((approval) => approval.stepId === "checkpoint:architect")).toMatchObject({
+      status: "rejected",
+      note: "stop here"
+    });
+    expect(harness.worker.inputs).toHaveLength(0);
+  });
+
+  it("waits at each checkpoint in order and does not stop again after continue", async () => {
+    const harness = await createHarness({ teamPlan: checkpointTeamPlanFixture(["lead", "architect"]) });
+    await harness.executor.start("project-1");
+
+    const first = await harness.executor.decide("team-run-1", { decision: "approved" });
+    expect(first.outcome).toBe("awaiting-checkpoint");
+    expect(first.teamRun.approvals?.find((approval) => approval.stepId === "checkpoint:lead")).toMatchObject({ status: "pending" });
+    expect(harness.worker.inputs.map((input) => input.metadata?.roleId)).toEqual(["lead"]);
+
+    harness.worker.inputs.length = 0;
+    const second = await harness.executor.continueCheckpoint("team-run-1", { decision: "continue" });
+
+    expect(second.outcome).toBe("awaiting-checkpoint");
+    expect(second.teamRun.approvals?.find((approval) => approval.stepId === "checkpoint:lead")).toMatchObject({ status: "approved" });
+    expect(second.teamRun.approvals?.find((approval) => approval.stepId === "checkpoint:architect")).toMatchObject({ status: "pending" });
+    expect(harness.worker.inputs.map((input) => input.metadata?.roleId)).toEqual(["architect"]);
+
+    harness.worker.inputs.length = 0;
+    const completed = await harness.executor.continueCheckpoint("team-run-1", { decision: "continue" });
+
+    expect(completed.outcome).toBe("completed");
+    expect(harness.worker.inputs.map((input) => input.metadata?.roleId)).toEqual(["implementer"]);
+    expect(completed.teamRun.roles.map((role) => [role.roleId, role.status])).toEqual([
+      ["lead", "completed"],
+      ["architect", "completed"],
+      ["implementer", "completed"]
+    ]);
+  });
+
+  it("keeps awaiting-checkpoint runs gated on resume", async () => {
+    const harness = await createHarness({ teamPlan: checkpointTeamPlanFixture(["architect"]) });
+    await harness.executor.start("project-1");
+    await harness.executor.decide("team-run-1", { decision: "approved" });
+    harness.worker.inputs.length = 0;
+
+    const result = await harness.executor.resume("team-run-1");
+
+    expect(result.outcome).toBe("awaiting-checkpoint");
+    expect(result.teamRun.status).toBe("awaiting-checkpoint");
+    expect(harness.worker.inputs).toHaveLength(0);
+  });
+
+  it("waits at checkpoints before write-mode post-run review", async () => {
+    const harness = await createHarness({ teamPlan: checkpointTeamPlanFixture(["architect"]), write: true });
+    await harness.executor.start("project-1");
+
+    const awaitingCheckpoint = await harness.executor.decide("team-run-1", { decision: "approved" });
+
+    expect(awaitingCheckpoint.outcome).toBe("awaiting-checkpoint");
+    expect(harness.worktree.diffCalls).toHaveLength(0);
+
+    const awaitingReview = await harness.executor.continueCheckpoint("team-run-1", { decision: "continue" });
+
+    expect(awaitingReview.outcome).toBe("awaiting-review");
+    expect(awaitingReview.teamRun.status).toBe("awaiting-review");
+    expect(awaitingReview.teamRun.approvals?.find((approval) => approval.stepId === "post-run-review")).toMatchObject({ status: "pending" });
+    expect(harness.worktree.diffCalls).toEqual([awaitingReview.teamRun.worktreePath]);
+  });
+
+  it("does not wait at a failed checkpoint role", async () => {
+    const harness = await createHarness({
+      teamPlan: checkpointTeamPlanFixture(["architect"]),
+      workerResults: [{ success: true, stdout: "ok lead" }, { success: false, stderr: "boom" }]
+    });
+    await harness.executor.start("project-1");
+
+    const result = await harness.executor.decide("team-run-1", { decision: "approved" });
+
+    expect(result.outcome).toBe("failed");
+    expect(result.teamRun.status).toBe("failed");
+    expect(result.teamRun.approvals?.find((approval) => approval.stepId === "checkpoint:architect")).toBeUndefined();
+    expect(result.teamRun.roles.map((role) => [role.roleId, role.status])).toEqual([
+      ["lead", "completed"],
+      ["architect", "failed"],
+      ["implementer", "skipped"]
+    ]);
+  });
+
   it("captures a write diff and waits for post-run review instead of completing", async () => {
     const harness = await createHarness({ write: true });
     await harness.executor.start("project-1");
@@ -536,6 +694,20 @@ function teamPlanFixture(): TeamPlan {
         reportsTo: "architect"
       }
     ]
+  };
+}
+
+function checkpointTeamPlanFixture(checkpointRoleIds: readonly string[]): TeamPlan {
+  const checkpointRoleIdSet = new Set(checkpointRoleIds);
+  return {
+    roles: teamPlanFixture().roles.map((role) =>
+      checkpointRoleIdSet.has(role.id)
+        ? {
+            ...role,
+            checkpoint: true
+          }
+        : role
+    )
   };
 }
 
