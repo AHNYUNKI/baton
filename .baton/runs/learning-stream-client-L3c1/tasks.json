@@ -1,0 +1,47 @@
+{
+  "version": "1",
+  "runId": "learning-stream-client-L3c1",
+  "buildsOn": "learning-stream-L3b",
+  "baseBranch": "origin/main",
+  "language": "swift",
+  "gates": ["swift build", "swift test", "git diff -- packages (empty)"],
+  "notes": "앱이 team-run --stream NDJSON을 소비하는 데이터 층(이벤트/파서/스트리밍 클라이언트/리듀서). BatonKit 헤드리스 테스트(mock CommandRunner). 뷰는 L3c-2. Swift 단독, packages 무변경(TS 회귀 0).",
+  "tasks": [
+    {
+      "id": "task-C01",
+      "title": "계약: TeamRunStreamEvent / TeamRunStreamItem",
+      "description": "apps/macos/Baton/Sources/BatonKit/Contract/TeamRunStreamEvent.swift: TeamRunStreamEvent: Codable,Equatable,Sendable { type: String; roleId: String?; chunk: String? }. enum TeamRunStreamItem: Equatable,Sendable { case event(TeamRunStreamEvent); case final(TeamRun) }. 테스트: event 봉투 data 디코드(teamRun.role.output{roleId,chunk}/started/completed), 추가 필드 무시.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonKit/Contract/TeamRunStreamEvent.swift", "apps/macos/Baton/Tests/BatonKitTests/TeamRunStreamEventTests.swift"],
+      "dependencies": [],
+      "acceptanceCriteria": ["AC-01"],
+      "testCommands": ["swift test"]
+    },
+    {
+      "id": "task-C02",
+      "title": "파서: TeamRunStreamParser (NDJSON 라인→아이템)",
+      "description": "apps/macos/Baton/Sources/BatonKit/Client/TeamRunStreamParser.swift: struct TeamRunStreamParser. mutating func append(_ chunk: String) -> [TeamRunStreamItem] — 완전한 줄마다 JsonEnvelope 디코드: kind 'event'→.event(TeamRunStreamEvent), 'team-run'→.final(TeamRun), 그 외/디코드 실패 skip(관대). 부분 라인 버퍼링(NDJSONParser 패턴). finish() -> [TeamRunStreamItem]. 테스트: 완전한 줄, 부분 라인(다음 청크 합쳐 디코드), event·final 혼합, 알 수 없는 kind skip.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonKit/Client/TeamRunStreamParser.swift", "apps/macos/Baton/Tests/BatonKitTests/TeamRunStreamParserTests.swift"],
+      "dependencies": ["task-C01"],
+      "acceptanceCriteria": ["AC-02", "AC-03"],
+      "testCommands": ["swift test"]
+    },
+    {
+      "id": "task-C03",
+      "title": "BatonClient 스트리밍 메서드 3종",
+      "description": "apps/macos/Baton/Sources/BatonKit/Client/BatonClient.swift: streamTeamRunApprove(teamRunId, reject=false, note: String?=nil), streamTeamRunContinue(teamRunId, reject=false, note: String?=nil), streamTeamRunStart(projectId, options: StartTeamRunOptions) -> AsyncThrowingStream<TeamRunStreamItem, Error>. 인자에 --stream --json. runner.stream + TeamRunStreamParser, watch와 동일 continuation/Task/onTermination/mapRunnerError 패턴. 테스트(mock CommandRunner 청크 yield): approve/continue/start 인자 정확 + 아이템 시퀀스(event…→final).",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonKit/Client/BatonClient.swift", "apps/macos/Baton/Tests/BatonKitTests/BatonClientStreamTests.swift"],
+      "dependencies": ["task-C02"],
+      "acceptanceCriteria": ["AC-04", "AC-05"],
+      "testCommands": ["swift test"]
+    },
+    {
+      "id": "task-C04",
+      "title": "TeamRunStreamModel (순수 리듀서)",
+      "description": "apps/macos/Baton/Sources/BatonKit/Store/TeamRunStreamModel.swift: var outputByRole:[String:String]; var currentRoleId:String?; var final:TeamRun?. mutating apply(_ item): .event(started)→currentRoleId, .event(output)+roleId+chunk→outputByRole[roleId]+=chunk, .final→final. mutating reset(). 순수/Equatable/Sendable. 테스트: output 누적, currentRoleId 갱신, final 설정, 알 수 없는 type 무시, reset.",
+      "targetFiles": ["apps/macos/Baton/Sources/BatonKit/Store/TeamRunStreamModel.swift", "apps/macos/Baton/Tests/BatonKitTests/TeamRunStreamModelTests.swift"],
+      "dependencies": ["task-C01"],
+      "acceptanceCriteria": ["AC-06", "AC-07", "AC-08"],
+      "testCommands": ["swift test"]
+    }
+  ]
+}

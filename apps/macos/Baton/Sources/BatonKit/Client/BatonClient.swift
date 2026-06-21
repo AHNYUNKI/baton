@@ -185,6 +185,16 @@ public struct BatonClient: Sendable {
         return try await decodeJSON(arguments: arguments, expectedKind: "team-run")
     }
 
+    public func streamTeamRunStart(
+        projectId: String,
+        options: StartTeamRunOptions = StartTeamRunOptions()
+    ) -> AsyncThrowingStream<TeamRunStreamItem, Error> {
+        var arguments = ["project", "plan", "run", "start", projectId]
+        appendStartTeamRunOptions(options, to: &arguments)
+        arguments.append(contentsOf: ["--stream", "--json"])
+        return streamTeamRun(arguments: arguments)
+    }
+
     @discardableResult
     public func approveTeamRun(teamRunId: String, reject: Bool = false, note: String? = nil) async throws -> TeamRun {
         var arguments = ["project", "plan", "run", reject ? "reject" : "approve", teamRunId]
@@ -193,6 +203,19 @@ public struct BatonClient: Sendable {
         }
         arguments.append("--json")
         return try await decodeJSON(arguments: arguments, expectedKind: "team-run")
+    }
+
+    public func streamTeamRunApprove(
+        teamRunId: String,
+        reject: Bool = false,
+        note: String? = nil
+    ) -> AsyncThrowingStream<TeamRunStreamItem, Error> {
+        var arguments = ["project", "plan", "run", reject ? "reject" : "approve", teamRunId]
+        if let note, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            arguments.append(contentsOf: ["--note", note])
+        }
+        arguments.append(contentsOf: ["--stream", "--json"])
+        return streamTeamRun(arguments: arguments)
     }
 
     @discardableResult
@@ -216,6 +239,22 @@ public struct BatonClient: Sendable {
         }
         arguments.append("--json")
         return try await decodeJSON(arguments: arguments, expectedKind: "team-run")
+    }
+
+    public func streamTeamRunContinue(
+        teamRunId: String,
+        reject: Bool = false,
+        note: String? = nil
+    ) -> AsyncThrowingStream<TeamRunStreamItem, Error> {
+        var arguments = ["project", "plan", "run", "continue", teamRunId]
+        if reject {
+            arguments.append("--reject")
+        }
+        if let note, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            arguments.append(contentsOf: ["--note", note])
+        }
+        arguments.append(contentsOf: ["--stream", "--json"])
+        return streamTeamRun(arguments: arguments)
     }
 
     @discardableResult
@@ -307,6 +346,31 @@ public struct BatonClient: Sendable {
                     }
                     for event in try parser.finish() {
                         continuation.yield(event)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: mapRunnerError(error))
+                }
+            }
+
+            continuation.onTermination = { @Sendable _ in
+                task.cancel()
+            }
+        }
+    }
+
+    private func streamTeamRun(arguments streamArguments: [String]) -> AsyncThrowingStream<TeamRunStreamItem, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task { [runner, streamArguments] in
+                var parser = TeamRunStreamParser()
+                do {
+                    for try await chunk in runner.stream(arguments: streamArguments) {
+                        for item in parser.append(chunk) {
+                            continuation.yield(item)
+                        }
+                    }
+                    for item in parser.finish() {
+                        continuation.yield(item)
                     }
                     continuation.finish()
                 } catch {
